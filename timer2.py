@@ -429,10 +429,10 @@ class TimeTracker(QMainWindow):
         self._arc_active_tabs = {}
         self._arc_last_active = None
         
-        # 청소 타이머 추가
-        self.cleanup_timer = QTimer(self)
-        self.cleanup_timer.timeout.connect(self.cleanup_short_records)
-        self.cleanup_timer.start(30000)  # 30초마다 정리
+        # 청소 타이머 관련 코드 삭제
+        # self.cleanup_timer = QTimer(self)
+        # self.cleanup_timer.timeout.connect(self.cleanup_short_records)
+        # self.cleanup_timer.start(30000)  # 30초마다 정리
     
     def initUI(self):
         self.setWindowTitle('타임좌')
@@ -628,7 +628,7 @@ class TimeTracker(QMainWindow):
             else:
                 current_window = self.app_usage.get(app_name, {}).get('last_window', "Untitled")
             
-            # 새로운 앱이거나 처음 실행된 경우
+            # 새로운 앱이거나 처음 ���행된 경우
             if app_name not in self.app_usage:
                 self.app_usage[app_name] = {
                     'total_time': 0,
@@ -780,7 +780,7 @@ class TimeTracker(QMainWindow):
         # 타이머 정지
         self.timer.stop()
         self.app_update_timer.stop()
-        self.cleanup_timer.stop()  # 청소 타이머도 정지
+        # self.cleanup_timer.stop()  # 청소 타이머 관련 코드 삭제
         
         # 비동기 정리 작업 예약
         QTimer.singleShot(0, self._cleanup_resources)
@@ -799,37 +799,6 @@ class TimeTracker(QMainWindow):
 
     def _set_shutdown_flag(self):
         self._is_shutting_down = True
-    def cleanup_short_records(self):
-        """2초 이하의 기록을 정리하는 메소드"""
-        try:
-            # 앱별 정리
-            apps_to_remove = []
-            for app_name, app_data in self.app_usage.items():
-                # 창/탭 정리
-                windows_to_remove = []
-                for window_title, window_time in app_data['windows'].items():
-                    if window_time <= 2:
-                        windows_to_remove.append(window_title)
-                
-                # 창/탭 삭제
-                for window_title in windows_to_remove:
-                    del app_data['windows'][window_title]
-                
-                # 앱의 총 시간이 2초 이하이면 제거 대상으로 표시
-                if app_data['total_time'] <= 2:
-                    apps_to_remove.append(app_name)
-            
-            # 앱 삭제
-            for app_name in apps_to_remove:
-                del self.app_usage[app_name]
-            
-            # UI 업데이트가 필요한 경우에만 실행
-            if apps_to_remove or any(app_data.get('windows_removed', False) 
-                                   for app_data in self.app_usage.values()):
-                self.update_usage_stats()
-        
-        except Exception as e:
-            print(f"Error in cleanup_short_records: {e}")
 if __name__ == '__main__':
     try:
         app = QApplication(sys.argv)
@@ -841,4 +810,3 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     except Exception as e:
         print(f"Error occurred: {e}") #커밋용 헤헷
-

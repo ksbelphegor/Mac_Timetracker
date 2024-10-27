@@ -124,9 +124,27 @@ class Home_app_tracking(QWidget):
         self.tree_widget.setHeaderHidden(False)
         self.tree_widget.setColumnCount(2)
         self.tree_widget.setHeaderLabels(["Name", "Time"])
-        self.tree_widget.header().setSectionResizeMode(0, QHeaderView.Interactive)
+        
+        # 헤더 폰트 설정
+        header_font = QFont("Arial", 16, QFont.Bold)  # 16으로 증가
+        self.tree_widget.headerItem().setFont(0, header_font)
+        self.tree_widget.headerItem().setFont(1, header_font)
+        
+        # 열 크기 조정
+        self.tree_widget.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tree_widget.header().setSectionResizeMode(1, QHeaderView.Fixed)
-        self.tree_widget.header().resizeSection(1, 100)
+        self.tree_widget.header().resizeSection(1, 150)
+        
+        # 아이템 폰트 크기 증가
+        self.app_font = QFont("Arial", 15, QFont.Bold)  # 15로 증가
+        self.window_font = QFont("Arial", 14)  # 14로 증가
+        
+        # 행 높이 조정
+        self.tree_widget.setStyleSheet("""
+            QTreeWidget::item {
+                height: 30px;  # 행 높이도 30px로 증가
+            }
+        """)
         
         # Total 시간
         self.total_container = QWidget()
@@ -152,7 +170,7 @@ class Home_app_tracking(QWidget):
         
         self._pending_updates = set()
         
-        # 트��� 위젯 최적화 설정
+        # 트 위젯 최적화 설정
         self.tree_widget.setUniformRowHeights(True)  # 행 높이 균일화
         self.tree_widget.setAlternatingRowColors(True)  # 행 색상 교차 (시각적 구분)
         
@@ -243,6 +261,10 @@ class Home_app_tracking(QWidget):
                 minutes, seconds = divmod(remainder, 60)
                 app_item.setText(1, f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
+                # 앱 아이템 폰트 설정
+                app_item.setFont(0, self.app_font)
+                app_item.setFont(1, self.app_font)
+                
                 # 윈도우 항목 제한 및 재사용
                 if 'windows' in app_data:
                     window_items = sorted(
@@ -265,6 +287,10 @@ class Home_app_tracking(QWidget):
                             w_hours, w_remainder = divmod(int(window_time), 3600)
                             w_minutes, w_seconds = divmod(w_remainder, 60)
                             window_item.setText(1, f"{w_hours:02d}:{w_minutes:02d}:{w_seconds:02d}")
+
+                            # 창 아이템 폰트 설정
+                            window_item.setFont(0, self.window_font)
+                            window_item.setFont(1, self.window_font)
 
             # 사용하지 않는 항목 제거
             for app_name in list(self._widgets_cache.keys()):
@@ -702,3 +728,4 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     except Exception as e:
         print(f"Error occurred: {e}") #커밋용 헤헷
+

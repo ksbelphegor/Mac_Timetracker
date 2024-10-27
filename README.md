@@ -1,26 +1,31 @@
-# Mac Timetracker
+# Mac 타임트래커
 
-A macOS application that tracks time spent on different applications.
+맥OS용 애플리케이션 사용 시간 추적 프로그램입니다.
 
-## Features
-- Tracks active application usage time
-- Shows detailed window/tab level statistics
-- Menu bar integration with status icon
-- Clean and intuitive UI
+## 주요 기능
+- 실시간 애플리케이션 사용 시간 추적
+- 창/탭 단위의 상세 통계 제공
+- 메뉴바 통합 및 상태 아이콘
+- 깔끔하고 직관적인 사용자 인터페이스
 
-## Requirements
+## 시스템 요구사항
 - macOS
 - Python 3.x
 - PyQt5
 - PyObjC
 
-## Installation
-1. Clone the repository
-2. Install requirements:
+## 설치 방법
+1. 저장소 복제
+2. 필요한 패키지 설치:
    ```bash
    pip install PyQt5 pyobjc
    ```
-3. Run the application:
+3. 프로그램 실행:
    ```bash
    python timer2.py
    ```
+
+## 사용 방법
+- 메뉴바의 시계 아이콘을 통해 프로그램 제어
+- 홈 화면에서 전체 사용 통계 확인
+- 타이머 화면에서 현재 앱의 사용 시간 모니터링

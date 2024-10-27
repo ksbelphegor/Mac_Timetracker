@@ -1,4 +1,4 @@
-# Python
+# 파이썬 관련
 __pycache__/
 *.py[cod]
 *$py.class
@@ -6,7 +6,13 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+
+# 시스템 파일
 .DS_Store
 .env
+
+# 가상환경
 venv/
+
+# IDE 설정
 .idea/

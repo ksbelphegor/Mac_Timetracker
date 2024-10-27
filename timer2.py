@@ -10,7 +10,6 @@ import Cocoa
 import objc
 from subprocess import Popen, PIPE
 from Foundation import NSURL, NSString
-
 class StatusBarController(Cocoa.NSObject):
     def init(self):
         self = objc.super(StatusBarController, self).init()
@@ -19,12 +18,10 @@ class StatusBarController(Cocoa.NSObject):
         self._setup_status_item()
         self._setup_custom_view()
         return self
-
     def _setup_status_item(self):
         self.statusItem = Cocoa.NSStatusBar.systemStatusBar().statusItemWithLength_(
             Cocoa.NSVariableStatusItemLength)
         self.statusItem.setHighlightMode_(True)
-
     def _setup_custom_view(self):
         self.custom_view = Cocoa.NSView.alloc().initWithFrame_(Cocoa.NSMakeRect(0, 0, 90, 22))
         
@@ -50,10 +47,8 @@ class StatusBarController(Cocoa.NSObject):
         self.custom_view.addSubview_(self.time_label)
         
         self.statusItem.setView_(self.custom_view)
-
     def updateTime_(self, time_str):
         self.time_label.setStringValue_(time_str)
-
     def draw_clock_icon(self):
         width, height = 22, 22
         Cocoa.NSColor.blackColor().set()
@@ -70,13 +65,10 @@ class StatusBarController(Cocoa.NSObject):
         path.lineToPoint_(Cocoa.NSMakePoint(width/2+5, height/2))
         path.setLineWidth_(2)
         path.stroke()
-
     def iconClicked_(self, sender):
         self.statusItem.popUpStatusItemMenu_(self.menu)
-
     def setMenu_(self, menu):
         self.menu = menu
-
 class HomeWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -111,26 +103,42 @@ class HomeWidget(QWidget):
         layout.addWidget(button_container)
         
         self.setLayout(layout)
-
         # 타이머 설정
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_time)
         self.timer.start(1000)
-
     def update_time(self):
         if isinstance(self.parent(), TimeTracker):
             self.parent().update_time()
-
 class Home_app_tracking(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)  # 여백을 약간 증가
+        layout.setContentsMargins(15, 15, 15, 15)
         
-        self.usage_stats_label = QLabel("Home", self)
-        self.usage_stats_label.setFont(QFont("Arial", 22, QFont.Bold))  # 폰트 크기 약간 증가
-        layout.addWidget(self.usage_stats_label)
+        # Total 위젯을 멤버 변수로 저장
+        self.total_container = QWidget()
+        total_layout = QHBoxLayout(self.total_container)
         
+        self.total_label = QLabel("Total")
+        self.total_label.setFont(QFont("Arial", 16, QFont.Bold))
+        self.total_time_label = QLabel("00:00:00")
+        self.total_time_label.setFont(QFont("Arial", 16, QFont.Bold))
+        
+        total_layout.addWidget(self.total_label)
+        total_layout.addStretch()
+        total_layout.addWidget(self.total_time_label)
+        
+        # 구분선도 미리 생성
+        self.separator_line = QFrame()
+        self.separator_line.setFrameShape(QFrame.HLine)
+        self.separator_line.setFrameShadow(QFrame.Sunken)
+        
+        # 레이아웃에 추가
+        layout.addWidget(self.total_container)
+        layout.addWidget(self.separator_line)
+        
+        # 나머지 위젯들을 위한 레이아웃
         self.usage_stats_area = QScrollArea()
         self.usage_stats_area.setStyleSheet("""
             QScrollArea {
@@ -141,113 +149,184 @@ class Home_app_tracking(QWidget):
         """)
         self.usage_stats_widget = QWidget()
         self.usage_stats_layout = QVBoxLayout(self.usage_stats_widget)
-        self.usage_stats_layout.setSpacing(8)  # 간격 조정
+        self.usage_stats_layout.setSpacing(8)
         self.usage_stats_area.setWidget(self.usage_stats_widget)
         self.usage_stats_area.setWidgetResizable(True)
         
         layout.addWidget(self.usage_stats_area)
-        self.setLayout(layout)
+        self._widgets_cache = {}
+        self._layout_update_timer = QTimer()
+        self._layout_update_timer.setSingleShot(True)
+        self._layout_update_timer.timeout.connect(self._update_layout)
+        self._pending_updates = set()
 
+    def _update_total_widget(self, total_all_apps):
+        # 기존 Total 라벨만 업데이트
+        hours, remainder = divmod(int(total_all_apps), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        self.total_time_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
     def update_usage_stats(self):
         try:
             main_window = self.window()
             if not isinstance(main_window, TimeTracker):
                 return
 
-            # 기존 위젯들을 한 번에 제거
-            for i in reversed(range(self.usage_stats_layout.count())): 
-                self.usage_stats_layout.itemAt(i).widget().deleteLater()
+            # 업데이트가 필요한 앱 목록 수집
+            self._pending_updates = {
+                app_name for app_name, app_data in main_window.app_usage.items()
+                if app_data['total_time'] > 0
+            }
 
-            # Total 시간 계산 및 표시
-            total_all_apps = sum(app_data['total_time'] for app_data in main_window.app_usage.values())
-            hours, remainder = divmod(int(total_all_apps), 3600)
-            minutes, seconds = divmod(remainder, 60)
-            
-            total_container = QWidget()
-            total_layout = QHBoxLayout(total_container)
-            
-            total_label = QLabel("Total")
-            total_label.setFont(QFont("Arial", 16, QFont.Bold))
-            total_time_label = QLabel(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
-            total_time_label.setFont(QFont("Arial", 16, QFont.Bold))
-            
-            total_layout.addWidget(total_label)
-            total_layout.addStretch()
-            total_layout.addWidget(total_time_label)
-            
-            self.usage_stats_layout.addWidget(total_container)
-            
-            # 구분선 추가
-            line = QFrame()
-            line.setFrameShape(QFrame.HLine)
-            line.setFrameShadow(QFrame.Sunken)
-            self.usage_stats_layout.addWidget(line)
+            # 레이아웃 업데이트를 지연시켜 한 번에 처리
+            if not self._layout_update_timer.isActive():
+                self._layout_update_timer.start(100)
 
-            # 기존의 앱별 통�� 표시 코드
-            widgets_to_add = []
-            for app_name, app_data in sorted(main_window.app_usage.items(), 
-                                          key=lambda x: x[1]['total_time'], reverse=True):
-                app_container = QWidget()
-                app_container.setAttribute(Qt.WA_StyledBackground, True)  # 성능 최적화
-                app_layout = QVBoxLayout(app_container)
-                app_layout.setContentsMargins(5, 5, 5, 5)
-                app_layout.setSpacing(2)
-                
-                # 앱 헤더 (이름 + 총 시간)
-                header = QWidget()
-                header_layout = QHBoxLayout(header)
-                header_layout.setContentsMargins(0, 0, 0, 0)
-                
-                app_name_label = QLabel(app_name)
-                app_name_label.setFont(QFont("Arial", 14, QFont.Bold))
-                
-                total_time = app_data['total_time']
-                hours, remainder = divmod(int(total_time), 3600)
-                minutes, seconds = divmod(remainder, 60)
-                
-                total_time_label = QLabel(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
-                total_time_label.setFont(QFont("Arial", 14))
-                
-                header_layout.addWidget(app_name_label)
-                header_layout.addStretch()
-                header_layout.addWidget(total_time_label)
-                
-                app_layout.addWidget(header)
-                
-                # 탭/창 정보 추가
-                if 'windows' in app_data:
-                    for window_title, window_time in sorted(app_data['windows'].items(), 
-                                                          key=lambda x: x[1], reverse=True):
-                        w_hours, w_remainder = divmod(int(window_time), 3600)
-                        w_minutes, w_seconds = divmod(w_remainder, 60)
-                        
-                        window_container = QWidget()
-                        window_layout = QHBoxLayout(window_container)
-                        window_layout.setContentsMargins(20, 0, 0, 0)  # 왼쪽 여백을 주어 계층 구조 표시
-                        
-                        window_name_label = QLabel(window_title)
-                        window_name_label.setFont(QFont("Arial", 12))
-                        window_time_label = QLabel(f"{w_hours:02d}:{w_minutes:02d}:{w_seconds:02d}")
-                        window_time_label.setFont(QFont("Arial", 12))
-                        
-                        window_layout.addWidget(window_name_label)
-                        window_layout.addStretch()
-                        window_layout.addWidget(window_time_label)
-                        
-                        app_layout.addWidget(window_container)
-                
-                widgets_to_add.append(app_container)
-
-            # 준비된 위젯들을 한 번에 추가
-            for widget in widgets_to_add:
-                self.usage_stats_layout.addWidget(widget)
-
-            # 레이아웃 업데이트를 한 번만 수행
-            self.usage_stats_layout.update()
-            
         except Exception as e:
-            print(f"Error in Home_app_tracking.update_usage_stats: {e}")
+            print(f"Error in update_usage_stats: {e}")
 
+    def _update_layout(self):
+        try:
+            main_window = self.window()
+            if not isinstance(main_window, TimeTracker):
+                return
+
+            # Total 시간 업데이트
+            total_all_apps = sum(
+                app_data['total_time'] 
+                for app_data in main_window.app_usage.values()
+            )
+            self._update_total_widget(total_all_apps)
+
+            # 앱별 위젯 업데이트
+            current_apps = set()
+            for app_name in self._pending_updates:
+                if app_name in main_window.app_usage:
+                    app_data = main_window.app_usage[app_name]
+                    if app_data['total_time'] > 0:
+                        current_apps.add(app_name)
+                        if app_name in self._widgets_cache:
+                            self._update_app_widget(
+                                self._widgets_cache[app_name], 
+                                app_name, 
+                                app_data
+                            )
+                        else:
+                            widget = self._create_app_widget(app_name, app_data)
+                            self._widgets_cache[app_name] = widget
+                            self.usage_stats_layout.addWidget(widget)
+
+            # 사용하지 않는 위젯 정리
+            for app_name in list(self._widgets_cache.keys()):
+                if app_name not in current_apps:
+                    widget = self._widgets_cache.pop(app_name)
+                    self.usage_stats_layout.removeWidget(widget)
+                    widget.deleteLater()
+
+            self._pending_updates.clear()
+
+        except Exception as e:
+            print(f"Error in _update_layout: {e}")
+    def _update_app_widget(self, widget, app_name, app_data):
+        # 앱 전체 시간 업데이트
+        total_time = app_data['total_time']
+        hours, remainder = divmod(int(total_time), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        time_label = widget.findChild(QLabel, f"{app_name}_time")
+        if time_label:
+            time_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        
+        # 기존 창/탭 위젯 제거
+        windows_container = widget.findChild(QWidget, f"{app_name}_windows")
+        if windows_container:
+            layout = windows_container.layout()
+            while layout.count():
+                item = layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+        
+        # 새로운 창/탭 정보 추가
+        if 'windows' in app_data:
+            for window_title, window_time in sorted(app_data['windows'].items(), 
+                                                  key=lambda x: x[1], reverse=True):
+                if window_time > 0:  # 시간이 0보다 큰 경우만 표시
+                    w_hours, w_remainder = divmod(int(window_time), 3600)
+                    w_minutes, w_seconds = divmod(w_remainder, 60)
+                    
+                    window_container = QWidget()
+                    window_layout = QHBoxLayout(window_container)
+                    window_layout.setContentsMargins(20, 0, 0, 0)
+                    
+                    window_name_label = QLabel(window_title)
+                    window_name_label.setFont(QFont("Arial", 12))
+                    window_time_label = QLabel(f"{w_hours:02d}:{w_minutes:02d}:{w_seconds:02d}")
+                    window_time_label.setFont(QFont("Arial", 12))
+                    
+                    window_layout.addWidget(window_name_label)
+                    window_layout.addStretch()
+                    window_layout.addWidget(window_time_label)
+                    
+                    layout.addWidget(window_container)
+    def _create_app_widget(self, app_name, app_data):
+        app_container = QWidget()
+        app_container.setAttribute(Qt.WA_StyledBackground, True)
+        app_layout = QVBoxLayout(app_container)
+        app_layout.setContentsMargins(5, 5, 5, 5)
+        app_layout.setSpacing(2)
+        
+        # 앱 헤더 (이름 + 총 시간)
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
+        app_name_label = QLabel(app_name)
+        app_name_label.setFont(QFont("Arial", 14, QFont.Bold))
+        
+        total_time = app_data['total_time']
+        hours, remainder = divmod(int(total_time), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        total_time_label = QLabel(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        total_time_label.setObjectName(f"{app_name}_time")  # 객체 이름 설정
+        total_time_label.setFont(QFont("Arial", 14))
+        
+        header_layout.addWidget(app_name_label)
+        header_layout.addStretch()
+        header_layout.addWidget(total_time_label)
+        
+        app_layout.addWidget(header)
+        
+        # 탭/창 정보를 담을 컨테이너
+        windows_container = QWidget()
+        windows_container.setObjectName(f"{app_name}_windows")
+        windows_layout = QVBoxLayout(windows_container)
+        windows_layout.setContentsMargins(20, 0, 0, 0)
+        
+        # 탭/창 정보 추가
+        if 'windows' in app_data:
+            for window_title, window_time in sorted(app_data['windows'].items(), 
+                                                  key=lambda x: x[1], reverse=True):
+                if window_time > 0:  # 시간이 0보다 큰 경우만 표시
+                    w_hours, w_remainder = divmod(int(window_time), 3600)
+                    w_minutes, w_seconds = divmod(w_remainder, 60)
+                    
+                    window_container = QWidget()
+                    window_layout = QHBoxLayout(window_container)
+                    window_layout.setContentsMargins(20, 0, 0, 0)
+                    
+                    window_name_label = QLabel(window_title)
+                    window_name_label.setFont(QFont("Arial", 12))
+                    window_time_label = QLabel(f"{w_hours:02d}:{w_minutes:02d}:{w_seconds:02d}")
+                    window_time_label.setFont(QFont("Arial", 12))
+                    
+                    window_layout.addWidget(window_name_label)
+                    window_layout.addStretch()
+                    window_layout.addWidget(window_time_label)
+                    
+                    windows_layout.addWidget(window_container)
+        
+        app_layout.addWidget(windows_container)
+        return app_container
 class TimeTrackWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -270,7 +349,6 @@ class TimeTrackWidget(QWidget):
         time_layout.addWidget(self.time_label)
         layout.addWidget(self.time_frame)
         self.setLayout(layout)
-
 class TimeTracker(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -293,17 +371,26 @@ class TimeTracker(QMainWindow):
         # 필수 타이머만 유
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_time)
-        self.timer.start(1000)
-
+        self.timer.start(1000)  # 1초마다 업데이트
+        
         self.app_update_timer = QTimer(self)
         self.app_update_timer.timeout.connect(self.update_app_list)
-        self.app_update_timer.start(10000)
-
+        self.app_update_timer.start(10000)  # 10초마다 업데이트
+        
+        self._window_title_cache = {}
+        self._cache_timeout = 1.0
+        self._last_stats_update = 0
+        self._stats_update_interval = 5  # 5초마다 통계 업데이트
+        self._pending_updates = False  # UI 업데이트 최적화를 위한 플래그
+        
+        # 앱 종료 시 정리를 위한 변수
+        self._is_shutting_down = False
     def initUI(self):
         self.setWindowTitle('타임좌')
-        self.setFixedSize(1024, 1024)  # 전체 크기를 1024x1024로 증가
-        self.setWindowFlags(Qt.WindowStaysOnTopHint)
-
+        self.setFixedSize(1024, 1024)
+        # WindowStaysOnTopHint 플래그 제거
+        # self.setWindowFlags(Qt.WindowStaysOnTopHint)  
+        
         menubar = self.menuBar()
         timer_menu = menubar.addMenu('Menu')
         
@@ -318,12 +405,10 @@ class TimeTracker(QMainWindow):
         timer_menu.addAction(show_home_action)
         
         timer_menu.addMenu(self.work1_menu)
-
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         layout.addWidget(self.home_widget)
-
     def create_status_bar_menu(self):
         menu = Cocoa.NSMenu.alloc().init()
         
@@ -345,23 +430,18 @@ class TimeTracker(QMainWindow):
         menu.addItem_(quit_item)
         
         self.status_bar_controller.setMenu_(menu)
-
     @objc.python_method
     def showHome_(self, sender):
         self.show()
-
     @objc.python_method
     def showTimer_(self, sender):
         self.show_timer()
-
     @objc.python_method
     def quitApp_(self, sender):
         QApplication.instance().quit()
-
     def show_timer(self):
         self.time_track_widget.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         self.time_track_widget.show()
-
     def update_app_list(self):
         self.running_apps = set()
         for app in NSWorkspace.sharedWorkspace().runningApplications():
@@ -385,17 +465,14 @@ class TimeTracker(QMainWindow):
             item.setTarget_(self)
             item.setRepresentedObject_(app)
             work1_submenu.addItem_(item)
-
     @objc.python_method
     def selectApp_(self, sender):
         app_name = sender.representedObject()
         self.select_app(app_name)
-
     def select_app(self, app_name):
         self.current_app = app_name
         self.start_tracking()
         self.update_app_list()
-
     def start_tracking(self):
         if self.current_app:
             self.update_time_display()
@@ -406,121 +483,101 @@ class TimeTracker(QMainWindow):
                     padding: 5px;
                 }
             """)
-
     def update_time(self):
+        if self._is_shutting_down:
+            return
+            
         try:
             current_time = time.time()
             active_app = NSWorkspace.sharedWorkspace().activeApplication()
             
-            if active_app:
-                app_name = active_app['NSApplicationName']
+            if not active_app:
+                return
                 
-                # 앱이 실행 중인 목록에 없으면 추가
-                if app_name not in self.running_apps:
-                    self.running_apps.add(app_name)
-                
-                # 앱 사 시간 데이 구조 초기화
-                if app_name not in self.app_usage:
-                    self.app_usage[app_name] = {
-                        'total_time': 0,
-                        'windows': {},
-                        'last_window': None,
-                        'last_update': current_time
-                    }
-                
-                # 재 활성 창/탭 정보 가져오기
+            app_name = active_app['NSApplicationName']
+            
+            # 기본 시간 업데이트
+            if app_name not in self.app_usage:
+                self.app_usage[app_name] = {
+                    'total_time': 0,
+                    'windows': {},
+                    'last_window': None,
+                    'last_update': current_time
+                }
+            
+            app_data = self.app_usage[app_name]
+            time_diff = current_time - app_data['last_update']
+            
+            # 창 제목은 더 긴 간격으로 업데이트
+            if current_time - self._last_stats_update >= self._stats_update_interval:
                 current_window = self.get_active_window_title(app_name)
-                
-                # 창/탭 데이터 구조 초기화
-                if current_window and current_window not in self.app_usage[app_name]['windows']:
-                    self.app_usage[app_name]['windows'][current_window] = 0
-                
-                time_diff = current_time - self.app_usage[app_name]['last_update']
-                
-                # 앱 전체 시간 업데이트
-                self.app_usage[app_name]['total_time'] += time_diff
-                
-                # 이전 창/탭의 시간 업데이트
-                last_window = self.app_usage[app_name]['last_window']
-                if last_window and last_window in self.app_usage[app_name]['windows']:
-                    self.app_usage[app_name]['windows'][last_window] += time_diff
-                
-                # 현재 창/탭 정보 업데이트
-                self.app_usage[app_name]['last_window'] = current_window
-                self.app_usage[app_name]['last_update'] = current_time
-                
-                # UI 업데이트
-                self.update_time_display()
-                self.update_usage_stats()  # 여기서 home_app_tracking의 update_usage_stats가 호출됨
+                if current_window:
+                    if current_window not in app_data['windows']:
+                        app_data['windows'][current_window] = 0
+                    app_data['windows'][current_window] += time_diff
+                    app_data['last_window'] = current_window
+            
+            app_data['total_time'] += time_diff
+            app_data['last_update'] = current_time
+            
+            # UI 업데이트 최적화
+            if not self._pending_updates:
+                self._pending_updates = True
+                QTimer.singleShot(1000, self._delayed_ui_update)
                 
         except Exception as e:
             print(f"Error in update_time: {e}")
+
+    def _delayed_ui_update(self):
+        if not self._is_shutting_down:
+            self.update_time_display()
+            self.update_usage_stats()
+            self._pending_updates = False
 
     def update_usage_stats(self):
         # TimeTracker에서는 home_app_tracking의 update_usage_stats를 직접 호
         if hasattr(self.home_widget, 'home_app_tracking'):
             self.home_widget.home_app_tracking.update_usage_stats()
-
     def get_active_window_title(self, app_name):
+        current_time = time.time()
+        
+        # 캐시 확인
+        if app_name in self._window_title_cache:
+            cached_time, cached_title = self._window_title_cache[app_name]
+            if current_time - cached_time < self._cache_timeout:
+                return cached_title
+
         try:
-            if app_name == "Safari":
-                script = '''
-                    tell application "Safari"
-                        set windowTitle to name of current tab of front window
-                        return windowTitle
-                    end tell
-                '''
-            elif app_name == "Obsidian":
-                script = '''
-                    tell application "System Events"
-                        tell process "Obsidian"
-                            set windowTitle to name of first window
-                            return windowTitle
-                        end tell
-                    end tell
-                '''
-            elif app_name == "Cursor":
-                script = '''
-                    tell application "System Events"
-                        tell process "Cursor"
-                            set windowTitle to name of first window
-                            if windowTitle contains " — " then
-                                set AppleScript's text item delimiters to " — "
-                                set fileName to first text item of windowTitle
-                                return fileName
-                            end if
-                            return windowTitle
-                        end tell
-                    end tell
-                '''
-            elif app_name in ["Google Chrome", "Firefox"]:
-                script = '''
-                    tell application "%s"
-                        get title of active tab of front window
-                    end tell
-                ''' % app_name
-            else:
-                script = '''
-                    tell application "System Events"
-                        tell process "%s"
-                            set windowTitle to name of first window
-                            return windowTitle
-                        end tell
-                    end tell
-                ''' % app_name
-
-            p = Popen(['osascript', '-e', script], stdout=PIPE, stderr=PIPE)
-            out, err = p.communicate()
-            
-            if out:
-                title = out.decode('utf-8').strip()
-                return title if title else "Untitled"
+            # AppleScript 실행 최적화
+            if app_name in ["Safari", "Google Chrome", "Firefox", "Obsidian", "Cursor"]:
+                script = self._get_optimized_script(app_name)
+                if not script:
+                    return "Untitled"
+                
+                p = Popen(['osascript', '-e', script], stdout=PIPE, stderr=PIPE)
+                p.wait(timeout=0.5)  # 타임아웃 설정
+                out, _ = p.communicate()
+                
+                if out:
+                    title = out.decode('utf-8').strip()
+                    # 캐시 업데이트
+                    self._window_title_cache[app_name] = (current_time, title)
+                    return title if title else "Untitled"
             return "Untitled"
-
         except Exception as e:
             print(f"Error getting window title for {app_name}: {str(e)}")
             return "Untitled"
 
+    def _get_optimized_script(self, app_name):
+        # 자주 사용되는 스크립트를 미리 정의
+        scripts = {
+            "Safari": 'tell application "Safari" to get name of current tab of front window',
+            "Google Chrome": 'tell application "Google Chrome" to get title of active tab of front window',
+            "Firefox": 'tell application "Firefox" to get title of active tab of front window',
+            "Obsidian": 'tell application "System Events" to tell process "Obsidian" to get name of front window',
+            "Cursor": 'tell application "System Events" to tell process "Cursor" to get name of front window'
+        }
+        return scripts.get(app_name)
     def update_time_display(self):
         if self.current_app in self.app_usage:
             total_time = self.app_usage[self.current_app]['total_time']
@@ -542,11 +599,21 @@ class TimeTracker(QMainWindow):
             
             self.time_track_widget.time_label.setText(time_text)
             self.status_bar_controller.updateTime_(time_text)
-
     def closeEvent(self, event):
+        self._is_shutting_down = True
+        # 타이머 정지
+        self.timer.stop()
+        self.app_update_timer.stop()
+        
+        # 캐시 정리
+        self._window_title_cache.clear()
+        
+        # 위젯 정리
+        if hasattr(self.home_widget, 'home_app_tracking'):
+            self.home_widget.home_app_tracking._widgets_cache.clear()
+        
         event.ignore()
         self.hide()
-
 if __name__ == '__main__':
     try:
         app = QApplication(sys.argv)
@@ -558,5 +625,4 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     except Exception as e:
         print(f"Error occurred: {e}")
-# 테스트 주석
-# Updated version
+

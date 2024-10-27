@@ -111,29 +111,25 @@ class Home_app_tracking(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
         
-        # Total 위젯을 멤버 변수로 저장
+        # Total 위젯 폰트 크기 증가
         self.total_container = QWidget()
         total_layout = QHBoxLayout(self.total_container)
         
         self.total_label = QLabel("Total")
-        self.total_label.setFont(QFont("Arial", 16, QFont.Bold))
+        self.total_label.setFont(QFont("Arial", 20, QFont.Bold))  # 16 -> 20
         self.total_time_label = QLabel("00:00:00")
-        self.total_time_label.setFont(QFont("Arial", 16, QFont.Bold))
+        self.total_time_label.setFont(QFont("Arial", 20, QFont.Bold))  # 16 -> 20
         
         total_layout.addWidget(self.total_label)
         total_layout.addStretch()
         total_layout.addWidget(self.total_time_label)
         
-        # 구분선도 미리 생성
+        # 구분선
         self.separator_line = QFrame()
         self.separator_line.setFrameShape(QFrame.HLine)
         self.separator_line.setFrameShadow(QFrame.Sunken)
         
-        # 레이아웃에 추가
-        layout.addWidget(self.total_container)
-        layout.addWidget(self.separator_line)
-        
-        # 나머지 위젯들을 위한 레이아웃
+        # 스크롤 영역 설정 수정
         self.usage_stats_area = QScrollArea()
         self.usage_stats_area.setStyleSheet("""
             QScrollArea {
@@ -144,11 +140,16 @@ class Home_app_tracking(QWidget):
         """)
         self.usage_stats_widget = QWidget()
         self.usage_stats_layout = QVBoxLayout(self.usage_stats_widget)
-        self.usage_stats_layout.setSpacing(8)
+        self.usage_stats_layout.setSpacing(12)  # 8 -> 12
+        self.usage_stats_layout.setAlignment(Qt.AlignTop)  # 상단 정렬 추가
+        
         self.usage_stats_area.setWidget(self.usage_stats_widget)
         self.usage_stats_area.setWidgetResizable(True)
         
+        layout.addWidget(self.total_container)
+        layout.addWidget(self.separator_line)
         layout.addWidget(self.usage_stats_area)
+        
         self._widgets_cache = {}
         self._layout_update_timer = QTimer()
         self._layout_update_timer.setSingleShot(True)
@@ -253,9 +254,9 @@ class Home_app_tracking(QWidget):
                     window_layout.setContentsMargins(20, 0, 0, 0)
                     
                     window_name_label = QLabel(window_title)
-                    window_name_label.setFont(QFont("Arial", 12))
+                    window_name_label.setFont(QFont("Arial", 16))  # 12 -> 16
                     window_time_label = QLabel(f"{w_hours:02d}:{w_minutes:02d}:{w_seconds:02d}")
-                    window_time_label.setFont(QFont("Arial", 12))
+                    window_time_label.setFont(QFont("Arial", 16))  # 12 -> 16
                     
                     window_layout.addWidget(window_name_label)
                     window_layout.addStretch()
@@ -266,8 +267,8 @@ class Home_app_tracking(QWidget):
         app_container = QWidget()
         app_container.setAttribute(Qt.WA_StyledBackground, True)
         app_layout = QVBoxLayout(app_container)
-        app_layout.setContentsMargins(5, 5, 5, 5)
-        app_layout.setSpacing(2)
+        app_layout.setContentsMargins(10, 10, 10, 10)  # 5 -> 10
+        app_layout.setSpacing(4)  # 2 -> 4
         
         # 앱 헤더 (이름 + 총 시간)
         header = QWidget()
@@ -275,15 +276,15 @@ class Home_app_tracking(QWidget):
         header_layout.setContentsMargins(0, 0, 0, 0)
         
         app_name_label = QLabel(app_name)
-        app_name_label.setFont(QFont("Arial", 14, QFont.Bold))
+        app_name_label.setFont(QFont("Arial", 18, QFont.Bold))  # 14 -> 18
         
         total_time = app_data['total_time']
         hours, remainder = divmod(int(total_time), 3600)
         minutes, seconds = divmod(remainder, 60)
         
         total_time_label = QLabel(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
-        total_time_label.setObjectName(f"{app_name}_time")  # 객체 이름 설정
-        total_time_label.setFont(QFont("Arial", 14))
+        total_time_label.setObjectName(f"{app_name}_time")
+        total_time_label.setFont(QFont("Arial", 18))  # 14 -> 18
         
         header_layout.addWidget(app_name_label)
         header_layout.addStretch()
@@ -301,7 +302,7 @@ class Home_app_tracking(QWidget):
         if 'windows' in app_data:
             for window_title, window_time in sorted(app_data['windows'].items(), 
                                                   key=lambda x: x[1], reverse=True):
-                if window_time > 0:  # 시간이 0보다 큰 경우만 표시
+                if window_time > 0:
                     w_hours, w_remainder = divmod(int(window_time), 3600)
                     w_minutes, w_seconds = divmod(w_remainder, 60)
                     
@@ -310,9 +311,9 @@ class Home_app_tracking(QWidget):
                     window_layout.setContentsMargins(20, 0, 0, 0)
                     
                     window_name_label = QLabel(window_title)
-                    window_name_label.setFont(QFont("Arial", 12))
+                    window_name_label.setFont(QFont("Arial", 16))  # 12 -> 16
                     window_time_label = QLabel(f"{w_hours:02d}:{w_minutes:02d}:{w_seconds:02d}")
-                    window_time_label.setFont(QFont("Arial", 12))
+                    window_time_label.setFont(QFont("Arial", 16))  # 12 -> 16
                     
                     window_layout.addWidget(window_name_label)
                     window_layout.addStretch()
@@ -428,6 +429,11 @@ class TimeTracker(QMainWindow):
         self._arc_active_tabs = {}
         self._arc_last_active = None
         
+        # 청소 타이머 추가
+        self.cleanup_timer = QTimer(self)
+        self.cleanup_timer.timeout.connect(self.cleanup_short_records)
+        self.cleanup_timer.start(30000)  # 30초마다 정리
+    
     def initUI(self):
         self.setWindowTitle('타임좌')
         self.setFixedSize(1024, 1024)
@@ -695,14 +701,12 @@ class TimeTracker(QMainWindow):
             if current_time - cached_time < self._cache_timeout:
                 return cached_title
             
-            # 너무 빈번한 요청 방지
             if current_time - self._last_window_check < self._window_check_interval:
                 return cached_title
 
         self._last_window_check = current_time
 
         try:
-            # 단순화된 AppleScript로 변경
             script = '''
                 tell application "System Events"
                     set frontApp to first application process whose frontmost is true
@@ -714,33 +718,34 @@ class TimeTracker(QMainWindow):
             
             p = Popen(['osascript', '-e', script], stdout=PIPE, stderr=PIPE)
             try:
-                out, err = p.communicate(timeout=0.3)  # 타임아웃 시간 단축
+                out, err = p.communicate(timeout=0.3)
                 
                 if p.returncode == 0 and out:
                     title = out.decode('utf-8').strip()
                     if title:
+                        # "Loading..." 상태의 시간을 현재 창/탭으로 이전
+                        if app_name in self.app_usage:
+                            loading_time = self.app_usage[app_name]['windows'].get("Loading...", 0)
+                            if loading_time > 0:
+                                if title not in self.app_usage[app_name]['windows']:
+                                    self.app_usage[app_name]['windows'][title] = 0
+                                self.app_usage[app_name]['windows'][title] += loading_time
+                                self.app_usage[app_name]['windows'].pop("Loading...", None)
+                        
                         self._window_title_cache[app_name] = (current_time, title)
                         return title
-                
+            
             except TimeoutExpired:
                 p.kill()
-                if app_name in self._window_title_cache:
-                    return self._window_title_cache[app_name][1]
-                
+                return "Loading..."  # 타임아웃 시 Loading... 표시
+            
             except Exception as e:
                 print(f"Error in AppleScript execution: {e}")
-            
-            # 캐시된 값이 있으면 반환
-            if app_name in self._window_title_cache:
-                return self._window_title_cache[app_name][1]
-            
-            return "Untitled"
-                
+                return "Loading..."  # 예외 발생 시 Loading... 표시
+        
         except Exception as e:
             print(f"Error getting window title: {e}")
-            if app_name in self._window_title_cache:
-                return self._window_title_cache[app_name][1]
-            return "Untitled"
+            return "Loading..."  # 예외 발생 시 Loading... 표시
 
     def update_time_display(self):
         if self.current_app in self.app_usage:
@@ -775,6 +780,7 @@ class TimeTracker(QMainWindow):
         # 타이머 정지
         self.timer.stop()
         self.app_update_timer.stop()
+        self.cleanup_timer.stop()  # 청소 타이머도 정지
         
         # 비동기 정리 작업 예약
         QTimer.singleShot(0, self._cleanup_resources)
@@ -793,6 +799,37 @@ class TimeTracker(QMainWindow):
 
     def _set_shutdown_flag(self):
         self._is_shutting_down = True
+    def cleanup_short_records(self):
+        """2초 이하의 기록을 정리하는 메소드"""
+        try:
+            # 앱별 정리
+            apps_to_remove = []
+            for app_name, app_data in self.app_usage.items():
+                # 창/탭 정리
+                windows_to_remove = []
+                for window_title, window_time in app_data['windows'].items():
+                    if window_time <= 2:
+                        windows_to_remove.append(window_title)
+                
+                # 창/탭 삭제
+                for window_title in windows_to_remove:
+                    del app_data['windows'][window_title]
+                
+                # 앱의 총 시간이 2초 이하이면 제거 대상으로 표시
+                if app_data['total_time'] <= 2:
+                    apps_to_remove.append(app_name)
+            
+            # 앱 삭제
+            for app_name in apps_to_remove:
+                del self.app_usage[app_name]
+            
+            # UI 업데이트가 필요한 경우에만 실행
+            if apps_to_remove or any(app_data.get('windows_removed', False) 
+                                   for app_data in self.app_usage.values()):
+                self.update_usage_stats()
+        
+        except Exception as e:
+            print(f"Error in cleanup_short_records: {e}")
 if __name__ == '__main__':
     try:
         app = QApplication(sys.argv)

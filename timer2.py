@@ -8,7 +8,7 @@ from PyQt5.QtGui import QFont
 from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular  # 이 부분 추가
 import Cocoa
 import objc
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, TimeoutExpired  # TimeoutExpired 추가
 from Foundation import NSURL, NSString
 class StatusBarController(Cocoa.NSObject):
     def init(self):
@@ -419,6 +419,10 @@ class TimeTracker(QMainWindow):
                 background-color: #404040;
             }
         """)
+        
+        # 성능 최적화를 위한 변수 추가
+        self._last_window_check = 0
+        self._window_check_interval = 0.5  # 0.5초 간격으로 제한
     def initUI(self):
         self.setWindowTitle('타임좌')
         self.setFixedSize(1024, 1024)
@@ -523,13 +527,20 @@ class TimeTracker(QMainWindow):
             
         try:
             current_time = time.time()
-            active_app = NSWorkspace.sharedWorkspace().activeApplication()
             
+            # 활성 앱 정보 가져오기를 최적화
+            active_app = NSWorkspace.sharedWorkspace().activeApplication()
             if not active_app:
                 return
                 
             app_name = active_app['NSApplicationName']
-            current_window = self.get_active_window_title(app_name)
+            
+            # 불필요한 window title 검사 최소화
+            if self.current_app != app_name or \
+               current_time - self._last_window_check >= self._window_check_interval:
+                current_window = self.get_active_window_title(app_name)
+            else:
+                current_window = self.app_usage.get(app_name, {}).get('last_window', "Untitled")
             
             # 새로운 앱이거나 처음 실행된 경우
             if app_name not in self.app_usage:
@@ -598,59 +609,57 @@ class TimeTracker(QMainWindow):
     def get_active_window_title(self, app_name):
         current_time = time.time()
         
-        # 캐시 확인 로직은 유지
+        # 캐시 확인 및 요청 빈도 제한
         if app_name in self._window_title_cache:
             cached_time, cached_title = self._window_title_cache[app_name]
             if current_time - cached_time < self._cache_timeout:
                 return cached_title
+            
+            # 너무 빈번한 요청 방지
+            if current_time - self._last_window_check < self._window_check_interval:
+                return cached_title
+
+        self._last_window_check = current_time
 
         try:
-            # AppleScript 수정 - 더 안정적인 쿼리 방식 사용
+            # AppleScript 실행을 최적화된 버전으로 변경
             script = f'''
                 tell application "System Events"
                     set frontApp to first application process whose frontmost is true
                     if name of frontApp is "{app_name}" then
-                        tell process "{app_name}"
-                            set windowList to every window
-                            if windowList is not {{}} then
-                                repeat with windowItem in windowList
-                                    if value of attribute "AXMain" of windowItem is true then
-                                        return name of windowItem
-                                    end if
-                                end repeat
-                            end if
-                        end tell
+                        try
+                            return name of window 1 of process "{app_name}"
+                        end try
                     end if
                 end tell
             '''
             
-            # 프로세스 실행 시 타임아웃 증가 및 에러 처리 개선
             p = Popen(['osascript', '-e', script], stdout=PIPE, stderr=PIPE)
             try:
-                out, err = p.communicate(timeout=2.0)  # 타임아웃을 2초로 증가
+                out, err = p.communicate(timeout=0.5)  # 타임아웃 시간 더 단축
                 
                 if p.returncode == 0 and out:
                     title = out.decode('utf-8').strip()
-                    if title:  # 빈 문자열이 아닌 경우에만 캐시 업데이트
+                    if title:
                         self._window_title_cache[app_name] = (current_time, title)
                         return title
                 
-                # 캐시된 이전 값이 있다면 사용
-                if app_name in self._window_title_cache:
-                    return self._window_title_cache[app_name][1]
-                
-                return "Untitled"
-                
             except TimeoutExpired:
                 p.kill()
-                # 타임아웃 시 캐시된 값 반환
                 if app_name in self._window_title_cache:
                     return self._window_title_cache[app_name][1]
-                return "Untitled"
+                
+            except Exception as e:
+                print(f"Error in AppleScript execution: {e}")
+            
+            # 캐시된 값이 있으면 반환
+            if app_name in self._window_title_cache:
+                return self._window_title_cache[app_name][1]
+            
+            return "Untitled"
                 
         except Exception as e:
             print(f"Error getting window title for {app_name}: {e}")
-            # 에러 발생 시 캐시된 값 반환
             if app_name in self._window_title_cache:
                 return self._window_title_cache[app_name][1]
             return "Untitled"

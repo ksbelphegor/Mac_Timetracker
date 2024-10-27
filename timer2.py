@@ -423,6 +423,11 @@ class TimeTracker(QMainWindow):
         # 성능 최적화를 위한 변수 추가
         self._last_window_check = 0
         self._window_check_interval = 0.5  # 0.5초 간격으로 제한
+        
+        # Arc 브라우저 특별 처리를 위한 변수 추가
+        self._arc_active_tabs = {}
+        self._arc_last_active = None
+        
     def initUI(self):
         self.setWindowTitle('타임좌')
         self.setFixedSize(1024, 1024)
@@ -521,24 +526,99 @@ class TimeTracker(QMainWindow):
                     padding: 5px;
                 }
             """)
+    def _fetch_window_title(self, app_name):
+        """앱별로 최적화된 방식으로 창 제목을 가져오는 함수"""
+        try:
+            # Arc 브라우저 특별 처리
+            if app_name == "Arc":
+                script = '''
+                    tell application "Arc"
+                        try
+                            set currentSpace to active space
+                            set currentTab to active tab of currentSpace
+                            return title of currentTab
+                        end try
+                    end tell
+                '''
+            else:
+                # 기존 스크립트 사용
+                script = f'''
+                    tell application "System Events"
+                        set frontApp to first application process whose name is "{app_name}"
+                        try
+                            return name of window 1 of frontApp
+                        end try
+                    end tell
+                '''
+            
+            p = Popen(['osascript', '-e', script], stdout=PIPE, stderr=PIPE)
+            out, _ = p.communicate(timeout=0.3)  # 타임아웃 더 단축
+            
+            if p.returncode == 0 and out:
+                title = out.decode('utf-8').strip()
+                if title:
+                    return title
+            
+            # Arc의 경우 대체 방법 시도
+            if app_name == "Arc":
+                return self._get_arc_title_fallback()
+                
+            return None
+                
+        except Exception:
+            if app_name == "Arc":
+                return self._get_arc_title_fallback()
+            return None
+
+    def _get_arc_title_fallback(self):
+        """Arc 브라우저의 창 제목을 가져오는 대체 방법"""
+        try:
+            script = '''
+                tell application "System Events"
+                    tell process "Arc"
+                        set windowList to every window
+                        repeat with windowItem in windowList
+                            if value of attribute "AXMain" of windowItem is true then
+                                set windowTitle to name of windowItem
+                                if windowTitle is not "" then
+                                    return windowTitle
+                                end if
+                            end if
+                        end repeat
+                    end tell
+                end tell
+            '''
+            
+            p = Popen(['osascript', '-e', script], stdout=PIPE, stderr=PIPE)
+            out, _ = p.communicate(timeout=0.3)
+            
+            if p.returncode == 0 and out:
+                title = out.decode('utf-8').strip()
+                if title and title != "Arc":
+                    return title
+            
+            return self._arc_last_active or "New Tab"
+                
+        except Exception:
+            return self._arc_last_active or "New Tab"
+
     def update_time(self):
         if self._is_shutting_down:
             return
             
         try:
             current_time = time.time()
-            
-            # 활성 앱 정보 가져오기를 최적화
             active_app = NSWorkspace.sharedWorkspace().activeApplication()
+            
             if not active_app:
                 return
                 
             app_name = active_app['NSApplicationName']
             
-            # 불필요한 window title 검사 최소화
-            if self.current_app != app_name or \
-               current_time - self._last_window_check >= self._window_check_interval:
+            # 성능 최적화: 불필요한 window title 검사 최소화
+            if current_time - self._last_window_check >= self._window_check_interval:
                 current_window = self.get_active_window_title(app_name)
+                self._last_window_check = current_time
             else:
                 current_window = self.app_usage.get(app_name, {}).get('last_window', "Untitled")
             
@@ -577,7 +657,7 @@ class TimeTracker(QMainWindow):
             app_data['last_window'] = current_window
             app_data['last_update'] = current_time
             
-            # UI 업데이트 최적화
+            # UI 업데이트 최적화: 누적된 업데이트를 한 번에 처리
             if not self._pending_updates:
                 self._pending_updates = True
                 QTimer.singleShot(1000, self._delayed_ui_update)
@@ -622,21 +702,19 @@ class TimeTracker(QMainWindow):
         self._last_window_check = current_time
 
         try:
-            # AppleScript 실행을 최적화된 버전으로 변경
-            script = f'''
+            # 단순화된 AppleScript로 변경
+            script = '''
                 tell application "System Events"
                     set frontApp to first application process whose frontmost is true
-                    if name of frontApp is "{app_name}" then
-                        try
-                            return name of window 1 of process "{app_name}"
-                        end try
-                    end if
+                    try
+                        return name of window 1 of frontApp
+                    end try
                 end tell
             '''
             
             p = Popen(['osascript', '-e', script], stdout=PIPE, stderr=PIPE)
             try:
-                out, err = p.communicate(timeout=0.5)  # 타임아웃 시간 더 단축
+                out, err = p.communicate(timeout=0.3)  # 타임아웃 시간 단축
                 
                 if p.returncode == 0 and out:
                     title = out.decode('utf-8').strip()
@@ -659,7 +737,7 @@ class TimeTracker(QMainWindow):
             return "Untitled"
                 
         except Exception as e:
-            print(f"Error getting window title for {app_name}: {e}")
+            print(f"Error getting window title: {e}")
             if app_name in self._window_title_cache:
                 return self._window_title_cache[app_name][1]
             return "Untitled"
@@ -726,3 +804,4 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     except Exception as e:
         print(f"Error occurred: {e}") #커밋용 헤헷
+

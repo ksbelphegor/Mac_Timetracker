@@ -3,12 +3,13 @@ import time
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                             QLabel, QFrame, QMenu, QAction, QPushButton, 
                             QScrollArea, QMainWindow, QTreeWidget, QTreeWidgetItem, QHeaderView)
-from PyQt5.QtCore import QTimer, Qt, QSize  # QSize 추가
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont
-from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular  # NSApplicationActivationPolicyRegular 다시 추가
+from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular  # 다시 추가
 import Cocoa
 import objc
 from subprocess import Popen, PIPE, TimeoutExpired
+import os
 
 class StatusBarController(Cocoa.NSObject):
     def init(self):
@@ -105,60 +106,26 @@ class HomeWidget(QWidget):
     def update_time(self):
         if isinstance(self.parent(), TimeTracker):
             self.parent().update_time()
-class Home_app_tracking(QWidget):
+class Home_app_tracking(QWidget): # Total 안쪽 영역
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
         
-        # 시작 시간 초기화
+        # 시작 시간 및 업데이트 관련 변수 초기화
         self.start_time = time.time()
+        self._last_update = time.time()
+        self._update_interval = 3.0
+        self._pending_updates = set()
         
-        # 레이아웃 업데이트 타이머 초기화
-        self._layout_update_timer = QTimer(self)
-        self._layout_update_timer.timeout.connect(self._update_layout)
-        self._layout_update_timer.setSingleShot(True)
+        # 폰트 설정
+        self.app_font = QFont("Arial", 14)
+        self.window_font = QFont("Arial", 12)
         
-        # 트리 위젯 설정
-        self.tree_widget = QTreeWidget()
-        self.tree_widget.setHeaderHidden(False)
-        self.tree_widget.setColumnCount(2)
-        self.tree_widget.setHeaderLabels(["Name", "Time"])
-        
-        # 헤더 폰트 설정
-        header_font = QFont("Arial", 16, QFont.Bold)
-        self.tree_widget.headerItem().setFont(0, header_font)
-        self.tree_widget.headerItem().setFont(1, header_font)
-        
-        # 열 크기 조정
-        self.tree_widget.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.tree_widget.header().setSectionResizeMode(1, QHeaderView.Fixed)
-        self.tree_widget.header().resizeSection(1, 150)
-        
-        # 아이템 폰트 크기 설정
-        self.app_font = QFont("Arial", 15, QFont.Bold)
-        self.window_font = QFont("Arial", 14)
-        
-        # 아이템 높이 설정
-        self.tree_widget.setIconSize(QSize(30, 30))
-        
-        # 트리 위젯 기본 아이템 높이 설정
-        self.tree_widget.setStyleSheet("""
-            QTreeWidget {
-                background-color: #1E1E1E;
-                color: #FFFFFF;
-                border: none;
-            }
-            QTreeWidget::item {
-                padding: 8px;
-            }
-            QHeaderView::section {
-                background-color: #2C2C2C;
-                color: #FFFFFF;
-                padding: 8px;
-                border: none;
-            }
-        """)
+        # 캐시 및 상태 변수 초기화
+        self._widgets_cache = {}
+        self._is_active = True
+        self.MAX_ITEMS = 100
         
         # Total 시간
         self.total_container = QWidget()
@@ -173,7 +140,59 @@ class Home_app_tracking(QWidget):
         total_layout.addStretch()
         total_layout.addWidget(self.total_time_label)
         
-        # 레이아웃에 추가
+        # 트리 위젯 설정
+        self.tree_widget = QTreeWidget()
+        self.tree_widget.setHeaderHidden(False)
+        self.tree_widget.setColumnCount(2)
+        self.tree_widget.setHeaderLabels(["Name", "Time"])
+        
+        # 헤더 설정
+        header = self.tree_widget.header()
+        header.setSectionsMovable(True)
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        
+        # Name 열의 너비를 화면의 절반으로 설정 (약 512px)
+        self.tree_widget.setColumnWidth(0, 512)  # 1024의 절반
+        self.tree_widget.setColumnWidth(1, 200)  # Time 열은 적당한 크기로
+        
+        # 헤더와 아이템 폰트 크기 설정
+        header_font = QFont("Arial", 17, QFont.Bold)  # 20 -> 17
+        item_font = QFont("Arial", 15)  # 18 -> 15
+        
+        # 헤더 폰트 적용
+        self.tree_widget.headerItem().setFont(0, header_font)
+        self.tree_widget.headerItem().setFont(1, header_font)
+        
+        # 트리 위젯 스타일 설정
+        self.tree_widget.setStyleSheet("""
+            QTreeWidget {
+                background-color: #1E1E1E;
+                color: white;
+                border: none;
+                font-size: 15px;  /* 18 -> 15 */
+            }
+            QTreeWidget::item {
+                padding: 8px;  /* 10 -> 8 */
+                border-bottom: 1px solid #3C3C3C;
+                height: 35px;  /* 40 -> 35 */
+            }
+            QTreeWidget::item:selected {
+                background-color: #404040;
+            }
+            QHeaderView::section {
+                background-color: #2C2C2C;
+                color: white;
+                padding: 10px;  /* 12 -> 10 */
+                border: 1px solid #3C3C3C;
+                font-size: 17px;  /* 20 -> 17 */
+            }
+            QHeaderView::section:hover {
+                background-color: #404040;
+            }
+        """)
+        
+        # 레이아웃에 위젯 추가
         layout.addWidget(self.total_container)
         layout.addWidget(self.tree_widget)
         
@@ -182,24 +201,15 @@ class Home_app_tracking(QWidget):
         self.total_timer.timeout.connect(self.update_total_time)
         self.total_timer.start(1000)
         
-        self._pending_updates = set()
+        # 레이아웃 업데이트 타이
+        self._layout_update_timer = QTimer(self)
+        self._layout_update_timer.timeout.connect(self._update_layout)
+        self._layout_update_timer.setSingleShot(True)
         
-        # 트 위젯 최적화 설정
-        self.tree_widget.setUniformRowHeights(True)  # 행 높이 균일화
-        self.tree_widget.setAlternatingRowColors(True)  # 행 색상 교차 (시각적 구분)
-        
-        # 불필요한 기능 비활성화
-        self.tree_widget.setAnimated(False)  # 애니메이션 효과 끄기
-        self.tree_widget.setVerticalScrollMode(QTreeWidget.ScrollPerPixel)  # 스크롤 최적화
-
-        # 캐시 및 최적화 설정 추가
-        self.MAX_ITEMS = 100
+        # 캐시 초기화
         self._widgets_cache = {}
-        self._last_update = time.time()
-        self._update_interval = 3.0  # 3초마다 업데이트
-        
-        # 타이머 간격 조정
-        self.total_timer.setInterval(3000)  # 3초로 변경
+        self._is_active = True
+        self.MAX_ITEMS = 100
         
         # 창 활성화 상태 추적
         self._is_active = True
@@ -225,14 +235,39 @@ class Home_app_tracking(QWidget):
             if not isinstance(main_window, TimeTracker):
                 return
 
-            self._pending_updates = {
-                app_name for app_name, app_data in main_window.app_usage.items()
-                if app_data['total_time'] > 0
-            }
+            # 상위/하위 아이템 폰트 설정
+            parent_font = QFont("Arial", 17)
+            child_font = QFont("Arial", 16)
+            
+            for app_name, app_data in main_window.app_usage.items():
+                if app_data['total_time'] > 0:
+                    # 최상위 아이템 생성 또는 가져오기
+                    app_item = self._get_or_create_item(app_name)
+                    app_item.setFont(0, parent_font)
+                    app_item.setFont(1, parent_font)
+                    
+                    # 앱의 총 시간 계산 및 설정
+                    total_time = sum(app_data['windows'].values())
+                    hours = int(total_time // 3600)
+                    minutes = int((total_time % 3600) // 60)
+                    seconds = int(total_time % 60)
+                    time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                    app_item.setText(1, time_str)  # 앱 총 시간 설정
+                    
+                    # 하위 윈도우 아이템 처리
+                    for window_name, window_time in app_data['windows'].items():
+                        window_item = self._get_or_create_window_item(app_item, window_name)
+                        window_item.setFont(0, child_font)
+                        window_item.setFont(1, child_font)
+                        
+                        # 윈도우 시간 포맷팅 및 설정
+                        w_hours = int(window_time // 3600)
+                        w_minutes = int((window_time % 3600) // 60)
+                        w_seconds = int(window_time % 60)
+                        w_time_str = f"{w_hours:02d}:{w_minutes:02d}:{w_seconds:02d}"
+                        window_item.setText(1, w_time_str)
 
-            if not self._layout_update_timer.isActive():
-                self._layout_update_timer.start(1000)  # 1초로 변경
-                self._last_update = current_time
+            self._last_update = current_time
 
         except Exception as e:
             print(f"Error in update_usage_stats: {e}")
@@ -262,7 +297,7 @@ class Home_app_tracking(QWidget):
             for app_name, app_data in sorted_apps:
                 current_items.add(app_name)
                 
-                # 기존 아이템 재사용 또는 새로 생성
+                # 기존 아템 재사용 또는 새로 생성
                 app_item = self._widgets_cache.get(app_name)
                 if not app_item:
                     app_item = QTreeWidgetItem()
@@ -271,7 +306,10 @@ class Home_app_tracking(QWidget):
 
                 # 앱 정보 업데이트
                 app_item.setText(0, app_name)
-                hours, remainder = divmod(int(app_data['total_time']), 3600)
+                
+                # 앱의 총 시간 계산 (모든 윈도우/탭 시간의 합)
+                total_time = sum(app_data['windows'].values())
+                hours, remainder = divmod(int(total_time), 3600)
                 minutes, seconds = divmod(remainder, 60)
                 app_item.setText(1, f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
@@ -328,6 +366,43 @@ class Home_app_tracking(QWidget):
         
         # Total 시간 업데이트
         self.total_time_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+
+    def _get_or_create_item(self, app_name):
+        # 기존 아이템 찾기
+        for i in range(self.tree_widget.topLevelItemCount()):
+            item = self.tree_widget.topLevelItem(i)
+            if item.text(0) == app_name:
+                return item
+        
+        # 새 아이템 생성
+        item = QTreeWidgetItem([app_name])
+        self.tree_widget.addTopLevelItem(item)
+        
+        # 폰트 설정
+        item_font = QFont("Arial", 15)  # 18 -> 15
+        item.setFont(0, item_font)
+        item.setFont(1, item_font)
+        
+        return item
+
+    def _get_or_create_window_item(self, parent_item, window_name):
+        # 기존 하위 아이템 찾기
+        for i in range(parent_item.childCount()):
+            child = parent_item.child(i)
+            if child.text(0) == window_name:
+                return child
+        
+        # 새 하위 아이템 생성
+        child = QTreeWidgetItem([window_name])
+        parent_item.addChild(child)
+        
+        # 폰트 설정
+        item_font = QFont("Arial", 15)  # 18 -> 15
+        child.setFont(0, item_font)
+        child.setFont(1, item_font)
+        
+        return child
+
 class TimeTrackWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -532,12 +607,18 @@ class TimeTracker(QMainWindow):
             active_pid = active_app['NSApplicationProcessIdentifier']
             active_bundle_id = active_app['NSApplicationBundleIdentifier']
             
-            # 현재 창/탭 정보 가져오기
-            current_window = self.get_active_window_title(app_name)
+            # 현재 창이 맥 타임좌인 경우 추가
+            if self.isActiveWindow():
+                app_name = "맥 타임좌"
+                active_pid = os.getpid()  # 현재 프로세스 ID
+                active_bundle_id = "com.mactimeja.app"  # 임의의 번들 ID
+                current_window = "Home"  # 홈 창 이름
+            else:
+                # 기존 창/탭 정보 가져오기
+                current_window = self.get_active_window_title(app_name)
             
             # Loading 상태면 시간 기록하지 않음
             if current_window == "Loading...":
-                # 앱이 이미 존재하면 last_update 시간을 현재로 업데이트
                 if app_name in self.app_usage:
                     self.app_usage[app_name]['last_update'] = current_time
                 return
@@ -558,7 +639,7 @@ class TimeTracker(QMainWindow):
             
             # 시간 차이 계산 및 기록
             time_diff = current_time - app_data['last_update']
-            if time_diff > 0 and time_diff <= 3.5:  # 타이머 간격(3초)보다 약간 더 큰 값으로 제한
+            if time_diff > 0 and time_diff <= 3.5:  # 타머 간격(3초)보다 약간 더 큰 값으로 제한
                 # 탭 시간 업데이트
                 if current_window not in app_data['windows']:
                     app_data['windows'][current_window] = 0
@@ -715,20 +796,6 @@ class TimeTracker(QMainWindow):
 
     def _set_shutdown_flag(self):
         self._is_shutting_down = True
-    def _update_total_widget(self, total_time):
-        try:
-            # 프로그램 실행 시간 계산
-            elapsed_time = time.time() - self.start_time
-            hours, remainder = divmod(int(elapsed_time), 3600)
-            minutes, seconds = divmod(remainder, 60)
-            
-            if hasattr(self.home_widget, 'home_app_tracking'):
-                total_label = self.home_widget.home_app_tracking.total_time_label
-                if total_label:
-                    total_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
-                    
-        except Exception as e:
-            print(f"Error in _update_total_widget: {e}")
 if __name__ == '__main__':
     try:
         app = QApplication(sys.argv)
@@ -740,4 +807,15 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     except Exception as e:
         print(f"Error occurred: {e}") #커밋용 헤헷
+
+
+
+
+
+
+
+
+
+
+
 

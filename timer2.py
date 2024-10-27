@@ -3,7 +3,7 @@ import time
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                             QLabel, QFrame, QMenu, QAction, QPushButton, 
                             QScrollArea, QMainWindow, QTreeWidget, QTreeWidgetItem, QHeaderView)
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, QSize  # QSize 추가
 from PyQt5.QtGui import QFont
 from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular  # NSApplicationActivationPolicyRegular 다시 추가
 import Cocoa
@@ -126,7 +126,7 @@ class Home_app_tracking(QWidget):
         self.tree_widget.setHeaderLabels(["Name", "Time"])
         
         # 헤더 폰트 설정
-        header_font = QFont("Arial", 16, QFont.Bold)  # 16으로 증가
+        header_font = QFont("Arial", 16, QFont.Bold)
         self.tree_widget.headerItem().setFont(0, header_font)
         self.tree_widget.headerItem().setFont(1, header_font)
         
@@ -135,14 +135,28 @@ class Home_app_tracking(QWidget):
         self.tree_widget.header().setSectionResizeMode(1, QHeaderView.Fixed)
         self.tree_widget.header().resizeSection(1, 150)
         
-        # 아이템 폰트 크기 증가
-        self.app_font = QFont("Arial", 15, QFont.Bold)  # 15로 증가
-        self.window_font = QFont("Arial", 14)  # 14로 증가
+        # 아이템 폰트 크기 설정
+        self.app_font = QFont("Arial", 15, QFont.Bold)
+        self.window_font = QFont("Arial", 14)
         
-        # 행 높이 조정
+        # 아이템 높이 설정
+        self.tree_widget.setIconSize(QSize(30, 30))
+        
+        # 트리 위젯 기본 아이템 높이 설정
         self.tree_widget.setStyleSheet("""
+            QTreeWidget {
+                background-color: #1E1E1E;
+                color: #FFFFFF;
+                border: none;
+            }
             QTreeWidget::item {
-                height: 30px;  # 행 높이도 30px로 증가
+                padding: 8px;
+            }
+            QHeaderView::section {
+                background-color: #2C2C2C;
+                color: #FFFFFF;
+                padding: 8px;
+                border: none;
             }
         """)
         
@@ -507,9 +521,6 @@ class TimeTracker(QMainWindow):
                 }
             """)
     def update_time(self):
-        if self._is_shutting_down:
-            return
-            
         try:
             current_time = time.time()
             active_app = NSWorkspace.sharedWorkspace().activeApplication()
@@ -545,9 +556,9 @@ class TimeTracker(QMainWindow):
             
             app_data = self.app_usage[app_name]
             
-            # 시간 계산 및 기록 (실제 탭 정보가 있을 때만)
+            # 시간 차이 계산 및 기록
             time_diff = current_time - app_data['last_update']
-            if time_diff > 0:
+            if time_diff > 0 and time_diff <= 3.5:  # 타이머 간격(3초)보다 약간 더 큰 값으로 제한
                 # 탭 시간 업데이트
                 if current_window not in app_data['windows']:
                     app_data['windows'][current_window] = 0
@@ -587,7 +598,8 @@ class TimeTracker(QMainWindow):
             app_data = self.app_usage[app_name]
             if current_window not in app_data['windows']:
                 app_data['windows'][current_window] = 0
-            app_data['windows'][current_window] += time_diff
+            if time_diff <= 3.5:  # 여기도 제한 추가
+                app_data['windows'][current_window] += time_diff
             app_data['last_window'] = current_window
     def get_active_window_title(self, app_name):
         current_time = time.time()

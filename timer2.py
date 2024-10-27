@@ -529,26 +529,41 @@ class TimeTracker(QMainWindow):
                 return
                 
             app_name = active_app['NSApplicationName']
+            current_window = self.get_active_window_title(app_name)
             
-            # 기본 시간 업데이트
+            # 새로운 앱이거나 처음 실행된 경우
             if app_name not in self.app_usage:
                 self.app_usage[app_name] = {
                     'total_time': 0,
                     'windows': {},
-                    'last_window': None,
-                    'last_update': current_time
+                    'last_window': current_window,
+                    'last_update': current_time,
+                    'is_active': True
                 }
             
             app_data = self.app_usage[app_name]
-            time_diff = current_time - app_data['last_update']
             
-            # 창 제목 업데이트 빈도 제한
-            if current_time - self._last_stats_update >= self._stats_update_interval:
-                self._last_stats_update = current_time
-                # 비동기로 창 제목 업데이트
-                QTimer.singleShot(0, lambda: self._update_window_title(app_name, time_diff))
+            # 앱이 활성 상태일 때만 시간 누적
+            if app_data.get('is_active', True):
+                time_diff = current_time - app_data['last_update']
+                
+                # 전체 앱 시간 업데이트
+                app_data['total_time'] += time_diff
+                
+                # 현재 창/탭 시간 업데이트
+                if current_window:
+                    if current_window not in app_data['windows']:
+                        app_data['windows'][current_window] = 0
+                    app_data['windows'][current_window] += time_diff
             
-            app_data['total_time'] += time_diff
+            # 다른 앱들은 비활성 상태로 표시
+            for other_app in self.app_usage:
+                if other_app != app_name:
+                    self.app_usage[other_app]['is_active'] = False
+            
+            # 현재 앱을 활성 상태로 표시
+            app_data['is_active'] = True
+            app_data['last_window'] = current_window
             app_data['last_update'] = current_time
             
             # UI 업데이트 최적화
@@ -583,41 +598,61 @@ class TimeTracker(QMainWindow):
     def get_active_window_title(self, app_name):
         current_time = time.time()
         
-        # 캐시 확인
+        # 캐시 확인 로직은 유지
         if app_name in self._window_title_cache:
             cached_time, cached_title = self._window_title_cache[app_name]
             if current_time - cached_time < self._cache_timeout:
                 return cached_title
 
         try:
+            # AppleScript 수정 - 더 안정적인 쿼리 방식 사용
             script = f'''
                 tell application "System Events"
-                    tell process "{app_name}"
-                        try
-                            set frontWindow to first window whose focused is true
-                            return name of frontWindow
-                        on error
-                            try
-                                return name of front window
-                            on error
-                                return "Untitled"
-                            end try
-                        end try
-                    end tell
+                    set frontApp to first application process whose frontmost is true
+                    if name of frontApp is "{app_name}" then
+                        tell process "{app_name}"
+                            set windowList to every window
+                            if windowList is not {{}} then
+                                repeat with windowItem in windowList
+                                    if value of attribute "AXMain" of windowItem is true then
+                                        return name of windowItem
+                                    end if
+                                end repeat
+                            end if
+                        end tell
+                    end if
                 end tell
             '''
             
-            # 타임아웃을 더 짧게 설정
+            # 프로세스 실행 시 타임아웃 증가 및 에러 처리 개선
             p = Popen(['osascript', '-e', script], stdout=PIPE, stderr=PIPE)
-            out, err = p.communicate(timeout=1.0)  # 타임아웃을 1초로 감소
-            
-            if out:
-                title = out.decode('utf-8').strip()
-                self._window_title_cache[app_name] = (current_time, title)
-                return title if title else "Untitled"
+            try:
+                out, err = p.communicate(timeout=2.0)  # 타임아웃을 2초로 증가
                 
-            return "Untitled"
+                if p.returncode == 0 and out:
+                    title = out.decode('utf-8').strip()
+                    if title:  # 빈 문자열이 아닌 경우에만 캐시 업데이트
+                        self._window_title_cache[app_name] = (current_time, title)
+                        return title
+                
+                # 캐시된 이전 값이 있다면 사용
+                if app_name in self._window_title_cache:
+                    return self._window_title_cache[app_name][1]
+                
+                return "Untitled"
+                
+            except TimeoutExpired:
+                p.kill()
+                # 타임아웃 시 캐시된 값 반환
+                if app_name in self._window_title_cache:
+                    return self._window_title_cache[app_name][1]
+                return "Untitled"
+                
         except Exception as e:
+            print(f"Error getting window title for {app_name}: {e}")
+            # 에러 발생 시 캐시된 값 반환
+            if app_name in self._window_title_cache:
+                return self._window_title_cache[app_name][1]
             return "Untitled"
 
     def update_time_display(self):

@@ -156,9 +156,19 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
         self.tree_widget.setColumnWidth(0, 512)  # 1024의 절반
         self.tree_widget.setColumnWidth(1, 200)  # Time 열은 적당한 크기로
         
+        # 헤더 클릭 시 정렬 이벤트 연결
+        self.tree_widget.header().sectionClicked.connect(self.on_header_clicked)
+        
+        # 정렬 상태 추적을 위한 변수
+        self.sort_column = 1  # Time 컬럼 (인덱스 1)
+        self.sort_order = Qt.DescendingOrder  # 내림차순
+        
+        # 초기 정렬 설정
+        self.tree_widget.sortItems(self.sort_column, self.sort_order)
+        
         # 헤더와 아이템 폰트 크기 설정
-        header_font = QFont("Arial", 17, QFont.Bold)  # 20 -> 17
-        item_font = QFont("Arial", 15)  # 18 -> 15
+        header_font = QFont("Arial", 17, QFont.Bold)  # 헤더 폰트
+        item_font = QFont("Arial", 15)  # 아이템 폰트
         
         # 헤더 폰트 적용
         self.tree_widget.headerItem().setFont(0, header_font)
@@ -170,12 +180,12 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
                 background-color: #1E1E1E;
                 color: white;
                 border: none;
-                font-size: 15px;  /* 18 -> 15 */
+                font-size: 15px;
             }
             QTreeWidget::item {
-                padding: 8px;  /* 10 -> 8 */
+                padding: 8px;
                 border-bottom: 1px solid #3C3C3C;
-                height: 35px;  /* 40 -> 35 */
+                height: 35px;
             }
             QTreeWidget::item:selected {
                 background-color: #404040;
@@ -183,9 +193,9 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
             QHeaderView::section {
                 background-color: #2C2C2C;
                 color: white;
-                padding: 10px;  /* 12 -> 10 */
+                padding: 10px;
                 border: 1px solid #3C3C3C;
-                font-size: 17px;  /* 20 -> 17 */
+                font-size: 17px;
             }
             QHeaderView::section:hover {
                 background-color: #404040;
@@ -239,6 +249,12 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
             parent_font = QFont("Arial", 17)
             child_font = QFont("Arial", 16)
             
+            # 기존 정렬 상태 저장
+            current_sort_column = self.tree_widget.sortColumn()
+            current_sort_order = self.tree_widget.header().sortIndicatorOrder()
+            
+            self.tree_widget.setSortingEnabled(False)  # 정렬 일시 비활성화
+            
             for app_name, app_data in main_window.app_usage.items():
                 if app_data['total_time'] > 0:
                     # 최상위 아이템 생성 또는 가져오기
@@ -252,7 +268,10 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
                     minutes = int((total_time % 3600) // 60)
                     seconds = int(total_time % 60)
                     time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                    app_item.setText(1, time_str)  # 앱 총 시간 설정
+                    app_item.setText(1, time_str)
+                    
+                    # 시간값을 정렬을 위한 데이터로 저장
+                    app_item.setData(1, Qt.UserRole, total_time)
                     
                     # 하위 윈도우 아이템 처리
                     for window_name, window_time in app_data['windows'].items():
@@ -260,13 +279,17 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
                         window_item.setFont(0, child_font)
                         window_item.setFont(1, child_font)
                         
-                        # 윈도우 시간 포맷팅 및 설정
                         w_hours = int(window_time // 3600)
                         w_minutes = int((window_time % 3600) // 60)
                         w_seconds = int(window_time % 60)
                         w_time_str = f"{w_hours:02d}:{w_minutes:02d}:{w_seconds:02d}"
                         window_item.setText(1, w_time_str)
+                        window_item.setData(1, Qt.UserRole, window_time)
 
+            # 정렬 상태 복원
+            self.tree_widget.setSortingEnabled(True)
+            self.tree_widget.sortItems(current_sort_column, current_sort_order)
+            
             self._last_update = current_time
 
         except Exception as e:
@@ -282,6 +305,7 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
                 return
 
             self.tree_widget.setUpdatesEnabled(False)
+            self.tree_widget.setSortingEnabled(False)  # 정렬 일시 비활성화
 
             # 가장 많이 사용된 앱 순으로 정렬
             sorted_apps = sorted(
@@ -296,53 +320,18 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
 
             for app_name, app_data in sorted_apps:
                 current_items.add(app_name)
-                
-                # 기존 아템 재사용 또는 새로 생성
                 app_item = self._widgets_cache.get(app_name)
                 if not app_item:
                     app_item = QTreeWidgetItem()
                     self.tree_widget.addTopLevelItem(app_item)
                     self._widgets_cache[app_name] = app_item
 
-                # 앱 정보 업데이트
                 app_item.setText(0, app_name)
-                
-                # 앱의 총 시간 계산 (모든 윈도우/탭 시간의 합)
-                total_time = sum(app_data['windows'].values())
+                total_time = app_data['total_time']
                 hours, remainder = divmod(int(total_time), 3600)
                 minutes, seconds = divmod(remainder, 60)
                 app_item.setText(1, f"{hours:02d}:{minutes:02d}:{seconds:02d}")
-
-                # 앱 아이템 폰트 설정
-                app_item.setFont(0, self.app_font)
-                app_item.setFont(1, self.app_font)
-                
-                # 윈도우 항목 제한 및 재사용
-                if 'windows' in app_data:
-                    window_items = sorted(
-                        app_data['windows'].items(),
-                        key=lambda x: x[1],
-                        reverse=True
-                    )[:10]  # 최대 10개의 윈도우만 표시
-
-                    while app_item.childCount() > len(window_items):
-                        app_item.removeChild(app_item.child(app_item.childCount() - 1))
-
-                    for i, (window_title, window_time) in enumerate(window_items):
-                        if window_time > 0:
-                            if i < app_item.childCount():
-                                window_item = app_item.child(i)
-                            else:
-                                window_item = QTreeWidgetItem(app_item)
-
-                            window_item.setText(0, window_title)
-                            w_hours, w_remainder = divmod(int(window_time), 3600)
-                            w_minutes, w_seconds = divmod(w_remainder, 60)
-                            window_item.setText(1, f"{w_hours:02d}:{w_minutes:02d}:{w_seconds:02d}")
-
-                            # 창 아이템 폰트 설정
-                            window_item.setFont(0, self.window_font)
-                            window_item.setFont(1, self.window_font)
+                app_item.setData(1, Qt.UserRole, total_time)  # 정렬을 위한 데이터 저장
 
             # 사용하지 않는 항목 제거
             for app_name in list(self._widgets_cache.keys()):
@@ -352,6 +341,10 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
                     if index >= 0:
                         self.tree_widget.takeTopLevelItem(index)
 
+            # 정렬 활성화 및 적용
+            self.tree_widget.setSortingEnabled(True)
+            self.tree_widget.sortItems(self.sort_column, self.sort_order)
+            
             self.tree_widget.setUpdatesEnabled(True)
 
         except Exception as e:
@@ -402,6 +395,18 @@ class Home_app_tracking(QWidget): # Total 안쪽 영역
         child.setFont(1, item_font)
         
         return child
+
+    def on_header_clicked(self, logical_index):
+        # 클릭된 컬럼이 현재 정렬 컬럼인 경우 정렬 순서를 변경
+        if logical_index == self.sort_column:
+            self.sort_order = Qt.AscendingOrder if self.sort_order == Qt.DescendingOrder else Qt.DescendingOrder
+        else:
+            self.sort_column = logical_index
+            # Name 컬럼은 오름차순, Time 컬럼은 내림차순을 기본으로 설정
+            self.sort_order = Qt.AscendingOrder if logical_index == 0 else Qt.DescendingOrder
+        
+        # 정렬 실행
+        self.tree_widget.sortItems(self.sort_column, self.sort_order)
 
 class TimeTrackWidget(QWidget):
     def __init__(self, parent=None):
@@ -807,6 +812,10 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     except Exception as e:
         print(f"Error occurred: {e}") #커밋용 헤헷
+
+
+
+
 
 
 

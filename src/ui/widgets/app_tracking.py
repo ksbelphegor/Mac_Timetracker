@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWid
 from PyQt5.QtCore import QTimer, Qt, QRect, QPoint
 from PyQt5.QtGui import QFont, QPainter, QColor, QPen
 import time
+import traceback
 from datetime import datetime, timedelta
 from core.data_manager import DataManager
 import subprocess
@@ -383,108 +384,137 @@ class AppTrackingWidget(QWidget):
         self._last_tree_update = 0
         self._tree_update_interval = 2.0  # 트리 업데이트 간격을 2초로 설정
         self._pending_tree_update = False  # 트리 업데이트 대기 상태 초기화
+        self._expanded_items = {}  # 확장된 아이템 상태를 저장할 딕셔너리
 
     def update_usage_stats(self):
         """앱 사용 통계를 업데이트합니다."""
         try:
-            if not self._is_active:
-                return
-                
-            current_time = time.time()
-            current_date = datetime.now().date()
-            current_date_str = current_date.strftime('%Y-%m-%d')
+            workspace = NSWorkspace.sharedWorkspace()
+            active_app = workspace.activeApplication()
             
-            # 날짜가 변경되었는지 확인
-            if current_date != self.current_date:
-                print(f"날짜가 변경됨: {self.selected_date} -> {current_date_str}")
-                self.current_date = current_date
-                self.selected_date = current_date_str
-                if current_date_str not in self.app_usage['dates']:
-                    self.app_usage['dates'][current_date_str] = {}
-                self.active_app = None
-                self.active_window = None
-                self.active_start_time = None
-            
-            # 현재 활성 창 정보 가져오기
-            window_info = self.get_active_window_title()
-            
-            if window_info:
-                app_name, window_title = window_info
+            if active_app:
+                app_name = active_app['NSApplicationName']
+                window_title = self.get_active_window_title()
+                current_time = time.time()
                 
                 # 앱이 변경되었을 때
-                if app_name != self.active_app or window_title != self.active_window:
+                if app_name != self.active_app:
                     # 이전 앱의 사용 시간 업데이트
                     if self.active_app and self.active_start_time:
-                        elapsed = current_time - self.active_start_time
-                        if elapsed > 0:
-                            self.update_app_time(self.active_app, self.active_window, elapsed)
+                        elapsed_time = current_time - self.active_start_time
+                        if elapsed_time > 0:
+                            self.update_app_time(self.active_app, self.active_window, elapsed_time)
                     
-                    # 새로운 앱 정보 설정
+                    # 현재 날짜의 데이터 확인
+                    current_date = datetime.now().date().strftime('%Y-%m-%d')
+                    if current_date not in self.app_usage['dates']:
+                        self.app_usage['dates'][current_date] = {}
+                    
+                    # 새로운 앱의 시작 시간 기록
+                    if app_name not in self.app_usage['dates'][current_date]:
+                        self.app_usage['dates'][current_date][app_name] = {
+                            'total_time': 0,
+                            'windows': {},
+                            'start_times': [datetime.now().strftime('%H:%M')]
+                        }
+                    else:
+                        if 'start_times' not in self.app_usage['dates'][current_date][app_name]:
+                            self.app_usage['dates'][current_date][app_name]['start_times'] = []
+                        self.app_usage['dates'][current_date][app_name]['start_times'].append(datetime.now().strftime('%H:%M'))
+                    
                     self.active_app = app_name
                     self.active_window = window_title
                     self.active_start_time = current_time
                 
-                # 현재 앱의 시간 업데이트
-                elif self.active_start_time and app_name == self.active_app and window_title == self.active_window:
-                    elapsed = current_time - self.active_start_time
-                    if elapsed > 0:
-                        self.update_app_time(app_name, window_title, elapsed)
-                        self.active_start_time = current_time
-            
-            # UI 업데이트 (1초마다)
-            if not hasattr(self, '_last_ui_update') or (current_time - self._last_ui_update) >= 1:
-                self.update_tree_widget()
-                self.update_total_time()
-                self._last_ui_update = current_time
-            
-            # 데이터 저장 (30초마다)
-            if not hasattr(self, '_last_save_time') or (current_time - self._last_save_time) >= 30:
-                self.data_manager.save_app_usage(self.app_usage)
-                self._last_save_time = current_time
+                # 창 제목이 변경되었을 때
+                elif window_title != self.active_window:
+                    if self.active_app and self.active_start_time:
+                        elapsed_time = current_time - self.active_start_time
+                        if elapsed_time > 0:
+                            self.update_app_time(self.active_app, self.active_window, elapsed_time)
+                    self.active_window = window_title
+                    self.active_start_time = current_time
+                
+                # 동일한 앱/창이 계속 활성화되어 있을 때도 시간을 업데이트
+                elif self.active_app and self.active_start_time:
+                    elapsed_time = current_time - self.active_start_time
+                    if elapsed_time > 0:
+                        self.update_app_time(self.active_app, self.active_window, elapsed_time)
+                        self.active_start_time = current_time  # 시작 시간을 현재 시간으로 업데이트
+                
+                # 트리 업데이트 요청 (2초에 한 번만)
+                if current_time - self._last_tree_update >= self._tree_update_interval:
+                    self.save_expanded_state()  # 현재 확장 상태 저장
+                    self.update_tree_widget()
+                    self._last_tree_update = current_time
             
         except Exception as e:
-            print(f"통계 업데이트 중 오류 발생: {e}")
-            import traceback
-            print(traceback.format_exc())
+            print(f"앱 사용 통계 업데이트 중 오류 발생: {e}")
+            traceback.print_exc()
+
+    def save_expanded_state(self):
+        """현재 트리 위젯의 확장 상태를 저장합니다."""
+        self._expanded_items.clear()
+        iterator = QTreeWidgetItemIterator(self.tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            if item:
+                # 앱 이름과 창 제목을 조합하여 고유 키 생성
+                key = item.text(0)
+                if item.parent():
+                    key = f"{item.parent().text(0)}::{key}"
+                self._expanded_items[key] = item.isExpanded()
+            iterator += 1
+
+    def restore_expanded_state(self):
+        """저장된 확장 상태를 복원합니다."""
+        iterator = QTreeWidgetItemIterator(self.tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            if item:
+                key = item.text(0)
+                if item.parent():
+                    key = f"{item.parent().text(0)}::{key}"
+                if key in self._expanded_items:
+                    item.setExpanded(self._expanded_items[key])
+            iterator += 1
 
     def update_app_time(self, app_name=None, window_title=None, elapsed_time=None):
         """앱 사용 시간을 업데이트합니다."""
         try:
-            if not app_name or elapsed_time is None or elapsed_time <= 0:
+            if not all([app_name, elapsed_time]) or app_name == APP_NAME:
                 return
-
-            current_time = time.time()
+                
+            current_date = datetime.now().date().strftime('%Y-%m-%d')
             
-            # 날짜별 데이터 초기화
-            if self.selected_date not in self.app_usage['dates']:
-                self.app_usage['dates'][self.selected_date] = {}
+            # 날짜 데이터가 없으면 초기화
+            if current_date not in self.app_usage['dates']:
+                self.app_usage['dates'][current_date] = {}
             
-            # 앱별 데이터 초기화
-            if app_name not in self.app_usage['dates'][self.selected_date]:
-                self.app_usage['dates'][self.selected_date][app_name] = {
+            # 앱 데이터가 없으면 초기화
+            if app_name not in self.app_usage['dates'][current_date]:
+                self.app_usage['dates'][current_date][app_name] = {
                     'total_time': 0,
                     'windows': {},
-                    'last_update': current_time,
-                    'last_window': None
+                    'start_times': []
                 }
             
-            app_data = self.app_usage['dates'][self.selected_date][app_name]
+            # 앱의 총 사용 시간 업데이트
+            self.app_usage['dates'][current_date][app_name]['total_time'] += elapsed_time
             
-            # 윈도우 데이터 초기화
-            if window_title and window_title not in app_data['windows']:
-                app_data['windows'][window_title] = 0
-            
-            # 시간 업데이트
-            app_data['total_time'] += elapsed_time
+            # 창별 사용 시간 업데이트
             if window_title:
-                app_data['windows'][window_title] += elapsed_time
-            app_data['last_update'] = current_time
-            app_data['last_window'] = window_title
+                # window_title이 튜플인 경우 첫 번째 요소만 사용
+                if isinstance(window_title, tuple):
+                    window_title = window_title[1] if len(window_title) > 1 else window_title[0]
+                    
+                if window_title not in self.app_usage['dates'][current_date][app_name]['windows']:
+                    self.app_usage['dates'][current_date][app_name]['windows'][window_title] = 0
+                self.app_usage['dates'][current_date][app_name]['windows'][window_title] += elapsed_time
             
         except Exception as e:
-            print(f"Error updating app usage: {e}")
-            import traceback
-            print(traceback.format_exc())
+            print(f"앱 시간 업데이트 중 오류 발생: {e}")
+            traceback.print_exc()
 
     def get_app_window_title(self, app_name):
         """각 앱의 현재 창/탭 제목을 가져옵니다."""
@@ -580,168 +610,137 @@ class AppTrackingWidget(QWidget):
     def update_tree_widget(self):
         """트리 위젯의 내용을 업데이트합니다."""
         try:
-            # 현재 확장된 아이템들의 상태를 저장
-            expanded_items = {}
-            selected_items = {}
-            iterator = QTreeWidgetItemIterator(self.tree_widget)
-            while iterator.value():
-                item = iterator.value()
-                if item:
-                    # 앱 이름과 창 제목을 키로 사용
-                    key = item.text(0)
-                    if item.parent():
-                        parent_key = item.parent().text(0)
-                        key = f"{parent_key}::{key}"
-                    expanded_items[key] = item.isExpanded()
-                    if item.isSelected():
-                        selected_items[key] = True
-                iterator += 1
-            
-            # 현재 수직 스크롤바 위치 저장
-            scrollbar = self.tree_widget.verticalScrollBar()
-            scroll_pos = scrollbar.value() if scrollbar else 0
-            
-            # 트리 위젯 업데이트 시작
-            self.tree_widget.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
-            
-            # 현재 날짜의 데이터만 표시
             current_date = datetime.now().date().strftime('%Y-%m-%d')
-            if 'dates' not in self.app_usage or current_date not in self.app_usage['dates']:
-                self.tree_widget.clear()
-                self.tree_widget.setUpdatesEnabled(True)
+            if current_date not in self.app_usage['dates']:
                 return
+
+            # 현재 선택된 정렬 열과 정렬 순서 저장
+            header = self.tree_widget.header()
+            sort_column = header.sortIndicatorSection()
+            sort_order = header.sortIndicatorOrder()
+
+            # 트리가 비어있을 때만 새로 생성
+            if self.tree_widget.topLevelItemCount() == 0:
+                self.create_tree_items()
+            else:
+                self.update_tree_items()
+
+            # 이전 정렬 상태 복원
+            self.tree_widget.sortItems(sort_column, sort_order)
             
-            date_data = self.app_usage['dates'][current_date]
+            # 총 사용 시간 업데이트
+            self.update_total_time()
             
-            # 현재 아이템들의 데이터를 저장
-            current_items = {}
-            iterator = QTreeWidgetItemIterator(self.tree_widget)
-            while iterator.value():
-                item = iterator.value()
-                if item:
-                    key = item.text(0)
-                    if item.parent():
-                        parent_key = item.parent().text(0)
-                        key = f"{parent_key}::{key}"
-                    current_items[key] = {
-                        'total_time': item.text(3),
-                        'start_time': item.text(1),
-                        'end_time': item.text(2)
-                    }
-                iterator += 1
+            # 데이터 저장
+            self.data_manager.save_app_usage(self.app_usage)
             
-            # 앱별로 정렬하여 표시
-            for app_name, app_data in sorted(date_data.items()):
-                if not isinstance(app_data, dict) or 'total_time' not in app_data:
-                    continue
-                
-                # 시작 시간과 종료 시간 계산
-                last_update = app_data.get('last_update', time.time())
-                start_time = last_update - app_data['total_time']
-                end_time = last_update
-                
-                # 앱의 새로운 데이터
-                new_data = {
-                    'total_time': self.format_time(app_data['total_time']),
-                    'start_time': datetime.fromtimestamp(start_time).strftime('%H:%M:%S'),
-                    'end_time': datetime.fromtimestamp(end_time).strftime('%H:%M:%S')
-                }
-                
-                # 앱별 데이터 가져오기
-                app_data = self.app_usage['dates'][self.selected_date][app_name]
-                
-                # 현재 앱의 기존 아이템 찾기
-                existing_item = None
-                iterator = QTreeWidgetItemIterator(self.tree_widget)
-                while iterator.value():
-                    item = iterator.value()
-                    if item and not item.parent() and item.text(0) == app_name:
-                        existing_item = item
-                        break
-                    iterator += 1
-                
-                if existing_item:
-                    # 기존 아이템 업데이트
-                    existing_item.setText(1, "")  # 창 제목 열은 비워둠
-                    existing_item.setText(2, "")  # 마지막 업데이트 시간 열은 비워둠
-                    existing_item.setText(3, self.format_time(app_data['total_time']))  # 총 사용 시간
-                    app_item = existing_item
-                else:
-                    # 새 아이템 생성
-                    app_item = QTreeWidgetItem(self.tree_widget)
-                    app_item.setText(0, app_name)
-                    app_item.setText(1, "")  # 창 제목 열은 비워둠
-                    app_item.setText(2, "")  # 마지막 업데이트 시간 열은 비워둠
-                    app_item.setText(3, self.format_time(app_data['total_time']))  # 총 사용 시간
-                
-                # 창별 데이터 업데이트
-                if 'windows' in app_data:
-                    # 현재 자식 아이템들 저장
-                    current_children = {}
-                    for i in range(app_item.childCount()):
-                        child = app_item.child(i)
-                        current_children[child.text(1)] = child
-                    
-                    for window_title, window_time in sorted(app_data['windows'].items()):
-                        if window_title in current_children:
-                            # 기존 창 아이템 업데이트
-                            window_item = current_children[window_title]
-                            window_item.setText(0, app_name)  # 앱 이름
-                            window_item.setText(1, window_title)  # 창 제목
-                            window_item.setText(2, "")  # 마지막 업데이트 시간 열은 비워둠
-                            window_item.setText(3, self.format_time(window_time))  # 사용 시간
-                        else:
-                            # 새 창 아이템 추가
-                            window_item = QTreeWidgetItem(app_item)
-                            window_item.setText(0, app_name)  # 앱 이름
-                            window_item.setText(1, window_title)  # 창 제목
-                            window_item.setText(2, "")  # 마지막 업데이트 시간 열은 비워둠
-                            window_item.setText(3, self.format_time(window_time))  # 사용 시간
-                
-                # 확장 상태 복원
-                key = app_name
-                if key in expanded_items:
-                    app_item.setExpanded(expanded_items[key])
-                
-                # 자식 아이템들의 확장 상태도 복원
-                for i in range(app_item.childCount()):
-                    child = app_item.child(i)
-                    child_key = f"{app_name}::{child.text(0)}"
-                    if child_key in expanded_items:
-                        child.setExpanded(expanded_items[child_key])
-            
-            # 더 이상 존재하지 않는 앱 제거
-            for i in range(self.tree_widget.topLevelItemCount() - 1, -1, -1):
-                item = self.tree_widget.topLevelItem(i)
-                if item.text(0) not in date_data:
-                    self.tree_widget.takeTopLevelItem(i)
-            
-            # 정렬 적용
-            self.tree_widget.sortItems(self.sort_column, self.sort_order)
-            
-            # 선택 상태 복원
-            iterator = QTreeWidgetItemIterator(self.tree_widget)
-            while iterator.value():
-                item = iterator.value()
-                if item:
-                    key = item.text(0)
-                    if item.parent():
-                        parent_key = item.parent().text(0)
-                        key = f"{parent_key}::{key}"
-                    if key in selected_items:
-                        item.setSelected(True)
-                iterator += 1
-            
-            # 스크롤 위치 복원
-            if scrollbar:
-                scrollbar.setValue(scroll_pos)
-            
-            self.tree_widget.setUpdatesEnabled(True)  # UI 업데이트 재개
+            # 확장 상태 복원
+            self.restore_expanded_state()
             
         except Exception as e:
             print(f"트리 위젯 업데이트 중 오류 발생: {e}")
-            import traceback
             traceback.print_exc()
+
+    def create_tree_items(self):
+        """트리 아이템을 처음 생성합니다."""
+        current_date = datetime.now().date().strftime('%Y-%m-%d')
+        
+        for app_name, app_data in self.app_usage['dates'][current_date].items():
+            if app_name == APP_NAME:  # 자기 자신은 표시하지 않음
+                continue
+                
+            # 부모 아이템 생성
+            app_item = QTreeWidgetItem(self.tree_widget)
+            app_item.setText(0, app_name)  # 앱 이름
+            app_item.setText(1, '')  # 시작 시간은 비워둠
+            app_item.setText(2, '')  # 종료 시간은 비워둠
+            app_item.setData(0, Qt.UserRole, app_name)  # 앱 이름을 데이터로 저장
+            
+            # 총 사용 시간 계산 및 설정
+            total_time = self.calculate_total_time(app_data)
+            app_item.setText(3, self.format_time(total_time))
+            
+            # 창/탭별 세부 정보
+            start_times = app_data.get('start_times', [])
+            windows = app_data.get('windows', {})
+            
+            # 각 창에 대해 자식 아이템 생성
+            for window_title, window_time in windows.items():
+                if window_title:  # 창 제목이 있는 경우만
+                    # window_title이 튜플인 경우 첫 번째 요소만 사용
+                    if isinstance(window_title, tuple):
+                        window_title = window_title[1] if len(window_title) > 1 else window_title[0]
+                    
+                    # 시작 시간을 역순으로 정렬 (최신 시간이 먼저 오도록)
+                    sorted_times = sorted(start_times, reverse=True)
+                    
+                    # 각 시작 시간에 대해 별도의 항목 생성
+                    for start_time in sorted_times:
+                        window_item = QTreeWidgetItem(app_item)
+                        window_item.setText(0, window_title)  # 창 제목
+                        window_item.setData(0, Qt.UserRole, window_title)  # 창 제목을 데이터로 저장
+                        window_item.setText(1, start_time)  # 시작 시간
+                        window_item.setText(2, '')  # 종료 시간은 비워둠
+                        window_item.setText(3, '')  # 시간은 비워둠 (각 시작 시간 항목에는 시간을 표시하지 않음)
+
+    def update_tree_items(self):
+        """기존 트리 아이템의 시간 정보만 업데이트합니다."""
+        current_date = datetime.now().date().strftime('%Y-%m-%d')
+        
+        # 모든 최상위 아이템(앱)을 순회
+        for i in range(self.tree_widget.topLevelItemCount()):
+            app_item = self.tree_widget.topLevelItem(i)
+            app_name = app_item.data(0, Qt.UserRole)
+            
+            if app_name in self.app_usage['dates'][current_date]:
+                app_data = self.app_usage['dates'][current_date][app_name]
+                
+                # 총 사용 시간 업데이트
+                total_time = self.calculate_total_time(app_data)
+                app_item.setText(3, self.format_time(total_time))
+                
+                # 시작 시간과 창 정보
+                start_times = app_data.get('start_times', [])
+                windows = app_data.get('windows', {})
+                
+                # 각 창에 대해 시작 시간 업데이트
+                for window_title, window_time in windows.items():
+                    if window_title:
+                        if isinstance(window_title, tuple):
+                            window_title = window_title[1] if len(window_title) > 1 else window_title[0]
+                        
+                        # 현재 자식 아이템들의 시작 시간 수집
+                        existing_times = []
+                        for j in range(app_item.childCount()):
+                            child = app_item.child(j)
+                            if child.data(0, Qt.UserRole) == window_title:
+                                existing_times.append(child.text(1))
+                        
+                        # 새로운 시작 시간이 있으면 맨 위에 추가
+                        sorted_times = sorted(start_times, reverse=True)  # 최신 시간이 먼저 오도록 정렬
+                        for start_time in sorted_times:
+                            if start_time not in existing_times:
+                                # 새 아이템을 맨 앞에 삽입
+                                window_item = QTreeWidgetItem()
+                                window_item.setText(0, window_title)
+                                window_item.setData(0, Qt.UserRole, window_title)
+                                window_item.setText(1, start_time)
+                                window_item.setText(2, '')
+                                window_item.setText(3, '')
+                                # 맨 앞에 삽입
+                                app_item.insertChild(0, window_item)
+        
+        # 확장 상태 복원
+        # self.restore_expanded_state()
+
+    def calculate_total_time(self, app_data):
+        """앱의 총 사용 시간을 계산합니다."""
+        total_time = 0
+        windows = app_data.get('windows', {})
+        for window_time in windows.values():
+            if isinstance(window_time, (int, float)):
+                total_time += window_time
+        return total_time
 
     def update_total_time(self):
         """총 사용 시간을 업데이트합니다."""
@@ -848,8 +847,8 @@ class Home_app_tracking(AppTrackingWidget):
         self.tree_widget.viewport().setAttribute(Qt.WA_OpaquePaintEvent)
         
         # 트리 확장/축소 이벤트 연결
-        self.tree_widget.itemExpanded.connect(self._handle_item_expanded)
-        self.tree_widget.itemCollapsed.connect(self._handle_item_collapsed)
+        self.tree_widget.itemExpanded.connect(self.on_item_expanded)
+        self.tree_widget.itemCollapsed.connect(self.on_item_collapsed)
         
         # 헤더 설정
         header = self.tree_widget.header()
@@ -874,6 +873,87 @@ class Home_app_tracking(AppTrackingWidget):
         # 레이아웃에 위젯 추가
         layout.addWidget(total_graph_container)
         layout.addWidget(self.tree_widget)
+
+    def on_item_expanded(self, item):
+        """아이템이 확장될 때 호출되는 메서드"""
+        key = self.get_item_key(item)
+        self._expanded_items[key] = True
+
+    def on_item_collapsed(self, item):
+        """아이템이 축소될 때 호출되는 메서드"""
+        key = self.get_item_key(item)
+        self._expanded_items[key] = False
+
+    def get_item_key(self, item):
+        """트리 아이템의 고유 키를 생성"""
+        if item.parent():
+            parent_text = item.parent().text(0)
+            return f"{parent_text}::{item.text(0)}"
+        return item.text(0)
+
+    def save_expanded_state(self):
+        """현재 트리 위젯의 확장 상태를 저장합니다."""
+        self._expanded_items.clear()
+        iterator = QTreeWidgetItemIterator(self.tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            if item:
+                key = self.get_item_key(item)
+                self._expanded_items[key] = item.isExpanded()
+            iterator += 1
+
+    def restore_expanded_state(self):
+        """저장된 확장 상태를 복원합니다."""
+        iterator = QTreeWidgetItemIterator(self.tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            if item:
+                key = self.get_item_key(item)
+                if key in self._expanded_items:
+                    item.setExpanded(self._expanded_items[key])
+            iterator += 1
+
+    def update_tree_widget(self):
+        """트리 위젯의 내용을 업데이트합니다."""
+        try:
+            current_date = datetime.now().date().strftime('%Y-%m-%d')
+            if current_date not in self.app_usage['dates']:
+                return
+
+            # 현재 선택된 정렬 열과 정렬 순서 저장
+            header = self.tree_widget.header()
+            sort_column = header.sortIndicatorSection()
+            sort_order = header.sortIndicatorOrder()
+
+            # 트리가 비어있을 때만 새로 생성
+            if self.tree_widget.topLevelItemCount() == 0:
+                self.tree_widget.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
+                self.create_tree_items()
+                self.tree_widget.setUpdatesEnabled(True)  # UI 업데이트 재개
+            else:
+                # 확장 상태 저장
+                self.save_expanded_state()
+                
+                # 트리 아이템 업데이트
+                self.tree_widget.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
+                self.update_tree_items()
+                
+                # 확장 상태 복원
+                self.restore_expanded_state()
+                self.tree_widget.setUpdatesEnabled(True)  # UI 업데이트 재개
+
+            # 이전 정렬 상태 복원
+            self.tree_widget.sortItems(sort_column, sort_order)
+            
+            # 총 사용 시간 업데이트
+            self.update_total_time()
+            
+            # 데이터 저장
+            self.data_manager.save_app_usage(self.app_usage)
+            
+        except Exception as e:
+            print(f"트리 위젯 업데이트 중 오류 발생: {e}")
+            traceback.print_exc()
 
     def _handle_item_expanded(self, item):
         """트리 아이템이 확장될 때 호출됩니다."""

@@ -379,6 +379,11 @@ class AppTrackingWidget(QWidget):
         self.timer.start(500)  # 0.5초마다
         print("타이머 시작됨")
 
+        # 트리 업데이트 최적화를 위한 변수
+        self._last_tree_update = 0
+        self._tree_update_interval = 2.0  # 트리 업데이트 간격을 2초로 설정
+        self._pending_tree_update = False  # 트리 업데이트 대기 상태 초기화
+
     def update_usage_stats(self):
         """앱 사용 통계를 업데이트합니다."""
         try:
@@ -420,7 +425,7 @@ class AppTrackingWidget(QWidget):
                     self.active_start_time = current_time
                 
                 # 현재 앱의 시간 업데이트
-                elif self.active_start_time:
+                elif self.active_start_time and app_name == self.active_app and window_title == self.active_window:
                     elapsed = current_time - self.active_start_time
                     if elapsed > 0:
                         self.update_app_time(app_name, window_title, elapsed)
@@ -653,16 +658,16 @@ class AppTrackingWidget(QWidget):
                 
                 if existing_item:
                     # 기존 아이템 업데이트
-                    existing_item.setText(1, new_data['start_time'])
-                    existing_item.setText(2, new_data['end_time'])
+                    existing_item.setText(1, "")  # 시작 시간 숨김
+                    existing_item.setText(2, "")  # 종료 시간 숨김
                     existing_item.setText(3, new_data['total_time'])
                     app_item = existing_item
                 else:
                     # 새 아이템 생성
                     app_item = QTreeWidgetItem(self.tree_widget)
                     app_item.setText(0, app_name)
-                    app_item.setText(1, new_data['start_time'])
-                    app_item.setText(2, new_data['end_time'])
+                    app_item.setText(1, "")  # 시작 시간 숨김
+                    app_item.setText(2, "")  # 종료 시간 숨김
                     app_item.setText(3, new_data['total_time'])
                 
                 # 창별 데이터 업데이트
@@ -677,18 +682,16 @@ class AppTrackingWidget(QWidget):
                         if window_title in current_children:
                             # 기존 창 아이템 업데이트
                             window_item = current_children[window_title]
+                            window_item.setText(1, new_data['start_time'])  # 시작 시간 표시
+                            window_item.setText(2, new_data['end_time'])    # 종료 시간 표시
                             window_item.setText(3, self.format_time(window_time))
                         else:
                             # 새 창 아이템 추가
                             window_item = QTreeWidgetItem(app_item)
                             window_item.setText(0, window_title)
+                            window_item.setText(1, new_data['start_time'])  # 시작 시간 표시
+                            window_item.setText(2, new_data['end_time'])    # 종료 시간 표시
                             window_item.setText(3, self.format_time(window_time))
-                    
-                    # 더 이상 존재하지 않는 창 제거
-                    for i in range(app_item.childCount() - 1, -1, -1):
-                        child = app_item.child(i)
-                        if child.text(0) not in app_data['windows']:
-                            app_item.removeChild(child)
                 
                 # 확장 상태 복원
                 key = app_name
@@ -789,7 +792,7 @@ class Home_app_tracking(AppTrackingWidget):
         # 트리 업데이트 최적화를 위한 변수
         self._last_tree_update = 0
         self._tree_update_interval = 2.0  # 트리 업데이트 간격을 2초로 설정
-        self._pending_tree_update = False
+        self._pending_tree_update = False  # 트리 업데이트 대기 상태 초기화
 
     def _init_ui(self, layout):
         # Total 시간과 그래프를 포함하는 컨테이너

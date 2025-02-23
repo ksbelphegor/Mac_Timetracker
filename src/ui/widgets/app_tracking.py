@@ -176,7 +176,7 @@ class TimeGraphWidget(QWidget):
             
             # 시간 텍스트 (정시만 표시)
             dt = datetime.fromtimestamp(t)
-            time_text = dt.strftime('%H:%M:%S')
+            time_text = dt.strftime('%H:%M')
             
             # 텍스트 중앙 정렬
             metrics = painter.fontMetrics()

@@ -455,16 +455,17 @@ class AppTrackingWidget(QWidget):
 
             current_time = time.time()
             
+            # 날짜별 데이터 초기화
             if self.selected_date not in self.app_usage['dates']:
                 self.app_usage['dates'][self.selected_date] = {}
             
-            # 앱 데이터 초기화
+            # 앱별 데이터 초기화
             if app_name not in self.app_usage['dates'][self.selected_date]:
                 self.app_usage['dates'][self.selected_date][app_name] = {
                     'total_time': 0,
                     'windows': {},
-                    'is_active': True,
-                    'last_update': current_time
+                    'last_update': current_time,
+                    'last_window': None
                 }
             
             app_data = self.app_usage['dates'][self.selected_date][app_name]
@@ -646,7 +647,10 @@ class AppTrackingWidget(QWidget):
                     'end_time': datetime.fromtimestamp(end_time).strftime('%H:%M:%S')
                 }
                 
-                # 기존 아이템이 있는지 확인
+                # 앱별 데이터 가져오기
+                app_data = self.app_usage['dates'][self.selected_date][app_name]
+                
+                # 현재 앱의 기존 아이템 찾기
                 existing_item = None
                 iterator = QTreeWidgetItemIterator(self.tree_widget)
                 while iterator.value():
@@ -658,17 +662,17 @@ class AppTrackingWidget(QWidget):
                 
                 if existing_item:
                     # 기존 아이템 업데이트
-                    existing_item.setText(1, "")  # 시작 시간 숨김
-                    existing_item.setText(2, "")  # 종료 시간 숨김
-                    existing_item.setText(3, new_data['total_time'])
+                    existing_item.setText(1, "")  # 창 제목 열은 비워둠
+                    existing_item.setText(2, "")  # 마지막 업데이트 시간 열은 비워둠
+                    existing_item.setText(3, self.format_time(app_data['total_time']))  # 총 사용 시간
                     app_item = existing_item
                 else:
                     # 새 아이템 생성
                     app_item = QTreeWidgetItem(self.tree_widget)
                     app_item.setText(0, app_name)
-                    app_item.setText(1, "")  # 시작 시간 숨김
-                    app_item.setText(2, "")  # 종료 시간 숨김
-                    app_item.setText(3, new_data['total_time'])
+                    app_item.setText(1, "")  # 창 제목 열은 비워둠
+                    app_item.setText(2, "")  # 마지막 업데이트 시간 열은 비워둠
+                    app_item.setText(3, self.format_time(app_data['total_time']))  # 총 사용 시간
                 
                 # 창별 데이터 업데이트
                 if 'windows' in app_data:
@@ -676,22 +680,23 @@ class AppTrackingWidget(QWidget):
                     current_children = {}
                     for i in range(app_item.childCount()):
                         child = app_item.child(i)
-                        current_children[child.text(0)] = child
+                        current_children[child.text(1)] = child
                     
                     for window_title, window_time in sorted(app_data['windows'].items()):
                         if window_title in current_children:
                             # 기존 창 아이템 업데이트
                             window_item = current_children[window_title]
-                            window_item.setText(1, new_data['start_time'])  # 시작 시간 표시
-                            window_item.setText(2, new_data['end_time'])    # 종료 시간 표시
-                            window_item.setText(3, self.format_time(window_time))
+                            window_item.setText(0, app_name)  # 앱 이름
+                            window_item.setText(1, window_title)  # 창 제목
+                            window_item.setText(2, "")  # 마지막 업데이트 시간 열은 비워둠
+                            window_item.setText(3, self.format_time(window_time))  # 사용 시간
                         else:
                             # 새 창 아이템 추가
                             window_item = QTreeWidgetItem(app_item)
-                            window_item.setText(0, window_title)
-                            window_item.setText(1, new_data['start_time'])  # 시작 시간 표시
-                            window_item.setText(2, new_data['end_time'])    # 종료 시간 표시
-                            window_item.setText(3, self.format_time(window_time))
+                            window_item.setText(0, app_name)  # 앱 이름
+                            window_item.setText(1, window_title)  # 창 제목
+                            window_item.setText(2, "")  # 마지막 업데이트 시간 열은 비워둠
+                            window_item.setText(3, self.format_time(window_time))  # 사용 시간
                 
                 # 확장 상태 복원
                 key = app_name
@@ -760,10 +765,16 @@ class AppTrackingWidget(QWidget):
 
     def format_time(self, seconds):
         """초를 시:분:초 형식으로 변환합니다."""
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        seconds = int(seconds % 60)
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        try:
+            if isinstance(seconds, dict):
+                seconds = seconds.get('total_time', 0)
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            seconds = int(seconds % 60)
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        except Exception as e:
+            print(f"시간 포맷팅 중 오류 발생: {e}")
+            return "00:00:00"
 
 class Home_app_tracking(AppTrackingWidget):
     def __init__(self, parent=None):

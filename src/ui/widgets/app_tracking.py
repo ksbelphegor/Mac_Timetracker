@@ -176,7 +176,7 @@ class TimeGraphWidget(QWidget):
             
             # 시간 텍스트 (정시만 표시)
             dt = datetime.fromtimestamp(t)
-            time_text = dt.strftime('%H:00')
+            time_text = dt.strftime('%H:%M:%S')
             
             # 텍스트 중앙 정렬
             metrics = painter.fontMetrics()
@@ -387,7 +387,7 @@ class AppTrackingWidget(QWidget):
         self._expanded_items = {}  # 확장된 아이템 상태를 저장할 딕셔너리
 
     def update_usage_stats(self):
-        """앱 사용 통계를 업데이트합니다."""
+        """현재 활성화된 앱의 사용 통계를 업데이트합니다."""
         try:
             workspace = NSWorkspace.sharedWorkspace()
             active_app = workspace.activeApplication()
@@ -415,12 +415,12 @@ class AppTrackingWidget(QWidget):
                         self.app_usage['dates'][current_date][app_name] = {
                             'total_time': 0,
                             'windows': {},
-                            'start_times': [datetime.now().strftime('%H:%M')]
+                            'start_times': [datetime.now().strftime('%H:%M:%S')]
                         }
                     else:
                         if 'start_times' not in self.app_usage['dates'][current_date][app_name]:
                             self.app_usage['dates'][current_date][app_name]['start_times'] = []
-                        self.app_usage['dates'][current_date][app_name]['start_times'].append(datetime.now().strftime('%H:%M'))
+                        self.app_usage['dates'][current_date][app_name]['start_times'].append(datetime.now().strftime('%H:%M:%S'))
                     
                     self.active_app = app_name
                     self.active_window = window_title

@@ -37,6 +37,7 @@ class TimerKing(QMainWindow):
         # 초기화 플래그
         self._is_shutting_down = False
         self._pending_updates = False
+        self._initialization_complete = False
         
         # 데이터 매니저 초기화
         self.data_manager = DataManager.get_instance()
@@ -46,8 +47,8 @@ class TimerKing(QMainWindow):
         self._app_list_cache = set()
         self._last_app_update = 0
         self._last_window_check = 0
-        self._window_check_interval = 0.5  # 윈도우 체크 간격 (초)
-        self._app_cache_lifetime = 5.0  # 앱 캐시 수명 (초)
+        self._window_check_interval = 0.5
+        self._app_cache_lifetime = 5.0
         
         # 메모리 캐시
         self._memory_cache = {
@@ -57,29 +58,87 @@ class TimerKing(QMainWindow):
             'last_ui_update': 0
         }
         
-        # Timer 데이터 초기화
-        self.timer_data = self.data_manager.load_timer_data()
-        
-        # 앱 사용 통계 관련 초기화
-        self.last_update_time = time.time()
+        # 기본 데이터 초기화
         self.current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
+        self.app_usage = {'dates': {self.current_date: {}}}
+        self.timer_data = {}
         
-        # 저장된 데이터 불러오기
-        self.app_usage = self.data_manager.load_app_usage()
-        if 'dates' not in self.app_usage:
-            self.app_usage['dates'] = {}
+        # UI 초기화
+        self.initUI()
         
-        # 현재 날짜의 데이터가 없으면 초기화
-        if self.current_date not in self.app_usage['dates']:
-            self.app_usage['dates'][self.current_date] = {}
+        # 비동기 초기화 시작
+        self._start_async_initialization()
+        
+    def _start_async_initialization(self):
+        """비동기적으로 앱 초기화를 수행합니다."""
+        self.async_timer = QTimer(self)
+        self.async_timer.timeout.connect(self._async_init_step)
+        self.async_timer.start(100)  # 100ms 간격으로 초기화 단계 실행
+        self._init_step = 0
+        
+    def _async_init_step(self):
+        """초기화 단계를 순차적으로 실행합니다."""
+        if self._init_step == 0:
+            # 기본 타이머 데이터 로드
+            self.timer_data = self.data_manager.load_timer_data()
+            self._init_step += 1
+            
+        elif self._init_step == 1:
+            # 최근 사용 데이터만 로드
+            recent_usage = self.data_manager.load_recent_app_usage()
+            if recent_usage:
+                self.app_usage.update(recent_usage)
+            self._init_step += 1
+            
+        elif self._init_step == 2:
+            # 앱 리스트 초기 업데이트
+            self.update_app_list()
+            self._init_step += 1
+            
+        elif self._init_step == 3:
+            # 나머지 데이터 백그라운드 로드 시작
+            self._load_remaining_data_async()
+            self._init_step += 1
+            self._initialization_complete = True
+            self.async_timer.stop()
+            
+    def _load_remaining_data_async(self):
+        """나머지 앱 사용 데이터를 백그라운드에서 로드합니다."""
+        def load_data():
+            full_usage = self.data_manager.load_app_usage()
+            return full_usage
+            
+        self.thread_pool = ThreadPoolExecutor(max_workers=1)
+        future = self.thread_pool.submit(load_data)
+        future.add_done_callback(self._on_data_loaded)
+        
+    def _on_data_loaded(self, future):
+        """백그라운드 데이터 로딩이 완료되면 호출됩니다."""
+        try:
+            full_usage = future.result()
+            if full_usage:
+                self.app_usage.update(full_usage)
+        except Exception as e:
+            print(f"데이터 로딩 중 오류 발생: {e}")
+
+    def initUI(self):
+        """UI 컴포넌트를 초기화합니다."""
+        self.setWindowTitle('타임 트래커')
+        self.setFixedSize(1024, 1024)
         
         # StatusBarController 초기화
         self.status_bar_controller = StatusBarController.alloc().init()
         self.create_status_bar_menu()
         
-        # 위젯 초기화
+        # 기본 위젯 초기화
         self.home_widget = HomeWidget(self)
         self.time_track_widget = TimerWidget()
+        
+        # 중앙 위젯 설정
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        layout.addWidget(self.home_widget)
         
         # Timer 위젯 설정
         self.time_track_widget.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
@@ -88,39 +147,28 @@ class TimerKing(QMainWindow):
         
         # 앱 리스트 초기화
         self.running_apps = set()
-        self.update_app_list()
-        
-        self.initUI()
         
         # 타이머 설정
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_time)
         self.timer.start(1000)  # 1초마다 업데이트
         
+        # 앱 업데이트 타이머
         self.app_update_timer = QTimer(self)
         self.app_update_timer.timeout.connect(self.update_app_list)
         self.app_update_timer.start(5000)  # 5초마다 업데이트
         
         # UI 업데이트 최적화를 위한 변수
         self._last_ui_update = 0
-        self._ui_update_interval = 0.5  # UI 업데이트 간격 (초)
+        self._ui_update_interval = 0.5
         
         # 파일 저장 최적화를 위한 변수
         self._last_save = 0
-        self._save_interval = 60  # 저장 간격 (초)
+        self._save_interval = 60
         self._data_changed = False
         
         self.start_time = time.time()
-
-    def initUI(self):
-        self.setWindowTitle('타임')
-        self.setFixedSize(1024, 1024)
         
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
-        layout.addWidget(self.home_widget)
-
         # 스타일시트 설정
         self.setStyleSheet("""
             QMainWindow {

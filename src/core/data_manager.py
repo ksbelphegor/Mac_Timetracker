@@ -4,6 +4,7 @@ import traceback
 from core.config import DATA_DIR, APP_USAGE_FILE, TIMER_DATA_FILE
 import threading
 from time import time
+import datetime
 
 class DataManager:
     _instance = None
@@ -155,6 +156,36 @@ class DataManager:
                 print(f"타이머 데이터 저장 중 I/O 오류 발생: {e}")
             except Exception as e:
                 print(f"타이머 데이터 저장 중 예상치 못한 오류 발생: {e}")
+
+    def load_recent_app_usage(self):
+        """최근 7일간의 앱 사용 데이터만 로드합니다."""
+        try:
+            usage_file = os.path.join(DATA_DIR, 'app_usage.json')
+            if not os.path.exists(usage_file):
+                return None
+                
+            with open(usage_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+            # 최근 7일 데이터만 필터링
+            if 'dates' in data:
+                current_date = datetime.datetime.now().date()
+                recent_dates = {}
+                
+                for date_str, usage in data['dates'].items():
+                    try:
+                        date = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
+                        if (current_date - date).days <= 7:
+                            recent_dates[date_str] = usage
+                    except ValueError:
+                        continue
+                
+                return {'dates': recent_dates}
+            return None
+            
+        except Exception as e:
+            print(f"최근 앱 사용 데이터 로드 중 오류 발생: {e}")
+            return None
 
     @classmethod
     def force_save_all(cls):

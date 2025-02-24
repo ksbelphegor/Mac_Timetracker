@@ -41,14 +41,12 @@ class DataManager:
     def _update_cache_size(self, data):
         """캐시 크기를 업데이트하고 제한을 확인합니다."""
         try:
-            # 문자열로 변환하여 대략적인 메모리 사용량 계산
             data_size = len(json.dumps(data))
             if data_size > self._max_cache_size:
                 return False
             self._cache_size = data_size
             return True
         except Exception as e:
-            print(f"캐시 크기 계산 중 오류 발생: {e}")
             return False
 
     def ensure_data_directory(self):
@@ -203,7 +201,6 @@ class DataManager:
             return None
             
         except Exception as e:
-            print(f"최근 앱 사용 데이터 로드 중 오류 발생: {e}")
             return None
 
     @classmethod

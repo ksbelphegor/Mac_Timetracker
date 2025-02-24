@@ -24,16 +24,12 @@ def main():
     # 로깅 시스템 초기화
     setup_logging()
     
-    print("Starting application...")
-    
     try:
-        print("Checking data directory...")
         # 데이터 매니저 초기화
         data_manager = DataManager.get_instance()
         data_manager.ensure_data_directory()
         
         # 앱 실행
-        print("Initializing QApplication...")
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
         app.setApplicationName(APP_NAME)
@@ -45,7 +41,6 @@ def main():
                 app.setStyleSheet(f.read())
         
         # macOS 앱 설정
-        print("Setting up macOS bundle info...")
         bundle = NSBundle.mainBundle()
         info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
         if info:
@@ -54,15 +49,13 @@ def main():
             info['LSUIElement'] = True  # dock 아이콘 숨기기
         
         # 메인 윈도우 생성
-        print("Creating TimerKing instance...")
         main_window = TimerKing()
         main_window.show()
         
-        print("Starting event loop...")
         sys.exit(app.exec_())
         
     except Exception as e:
-        print(f"오류 발생: {e}")
+        print(f"치명적 오류 발생: {e}")
         traceback.print_exc()
 
 if __name__ == '__main__':

@@ -507,12 +507,9 @@ class TimerKing(QMainWindow):
             
             # 날짜가 변경되었는지 확인
             if current_date != self.current_date:
-                print(f"날짜가 변경됨: {self.current_date} -> {current_date}")
-                
                 # 새로운 날짜의 데이터 초기화
                 if current_date not in self.app_usage['dates']:
                     self.app_usage['dates'][current_date] = {}
-                print(f"새로운 날짜({current_date})의 데이터 공간 생성됨")
                 
                 # 현재 날짜 업데이트
                 self.current_date = current_date
@@ -533,28 +530,8 @@ class TimerKing(QMainWindow):
                         'last_update': current_time
                     }
                 
-                elapsed = current_time - self.timer_data.get('start_time', current_time)
-                self.app_usage['dates'][current_date][app_name]['total_time'] = (
-                    self.app_usage['dates'][current_date][app_name].get('total_time', 0) + elapsed
-                )
-                self.app_usage['dates'][current_date][app_name]['last_update'] = current_time
-                
-                # 현재 창 시간 업데이트
-                window_title = self.get_active_window_title()[1]
-                if window_title:
-                    if window_title not in self.app_usage['dates'][current_date][app_name]['windows']:
-                        self.app_usage['dates'][current_date][app_name]['windows'][window_title] = 0
-                    self.app_usage['dates'][current_date][app_name]['windows'][window_title] += elapsed
-            
-            # 데이터 저장
-            self.data_manager.save_app_usage(self.app_usage)
-            
-            # Home 위젯 업데이트
-            if hasattr(self, 'home_widget') and hasattr(self.home_widget, 'home_app_tracking'):
-                self.home_widget.home_app_tracking.update_usage_stats()
-            
         except Exception as e:
-            print(f"통계 업데이트 중 오류 발생: {e}")
+            print(f"치명적 오류 발생: {e}")
             traceback.print_exc()
 
     def save_app_usage(self):

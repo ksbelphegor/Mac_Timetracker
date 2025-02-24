@@ -11,6 +11,7 @@ import subprocess
 from Foundation import NSWorkspace
 import os
 from core.config import APP_NAME
+import json
 
 class TimeGraphWidget(QWidget):
     def __init__(self, parent=None):
@@ -379,7 +380,6 @@ class AppTrackingWidget(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_usage_stats)
         self.timer.start(500)  # 0.5초마다
-        print("타이머 시작됨")
 
         # 트리 업데이트 최적화를 위한 변수
         self._last_tree_update = 0
@@ -395,59 +395,55 @@ class AppTrackingWidget(QWidget):
             
             if active_app:
                 app_name = active_app['NSApplicationName']
-                window_title = self.get_active_window_title()
                 current_time = time.time()
                 
                 # 앱이 변경되었을 때
                 if app_name != self.active_app:
-                    # 이전 앱의 사용 시간 업데이트
-                    if self.active_app and self.active_start_time:
-                        elapsed_time = current_time - self.active_start_time
-                        if elapsed_time > 0:
-                            self.update_app_time(self.active_app, self.active_window, elapsed_time)
+                    print(f"\n=== 앱 전환 감지 ===")
+                    print(f"이전 앱: {self.active_app}")
+                    print(f"새 앱: {app_name}")
                     
-                    # 현재 날짜의 데이터 확인
+                    # 창 제목 가져오기
+                    window_info = self.get_active_window_title()
+                    print(f"가져온 창 정보: {window_info}")
+                    window_title = window_info[1] if isinstance(window_info, tuple) else window_info
+                    print(f"저장할 창 제목: {window_title}")
+                    
                     current_date = datetime.now().date().strftime('%Y-%m-%d')
                     if current_date not in self.app_usage['dates']:
                         self.app_usage['dates'][current_date] = {}
                     
-                    # 새로운 앱의 시작 시간 기록
+                    # 앱 데이터 초기화 또는 업데이트
                     if app_name not in self.app_usage['dates'][current_date]:
+                        print(f"새로운 앱 데이터 초기화: {app_name}")
                         self.app_usage['dates'][current_date][app_name] = {
                             'total_time': 0,
                             'windows': {},
-                            'start_times': [datetime.now().strftime('%H:%M:%S')]
+                            'start_times': []
                         }
-                    else:
-                        if 'start_times' not in self.app_usage['dates'][current_date][app_name]:
-                            self.app_usage['dates'][current_date][app_name]['start_times'] = []
-                        self.app_usage['dates'][current_date][app_name]['start_times'].append(datetime.now().strftime('%H:%M:%S'))
+                    elif 'start_times' not in self.app_usage['dates'][current_date][app_name]:
+                        # start_times 필드가 없으면 추가
+                        print(f"start_times 필드 추가: {app_name}")
+                        self.app_usage['dates'][current_date][app_name]['start_times'] = []
+                    
+                    # windows 딕셔너리에 창 제목 추가
+                    if window_title:
+                        if window_title not in self.app_usage['dates'][current_date][app_name]['windows']:
+                            self.app_usage['dates'][current_date][app_name]['windows'][window_title] = 0
+                            print(f"새 창 제목 추가됨: {window_title}")
+                        print(f"현재 저장된 windows 데이터: {self.app_usage['dates'][current_date][app_name]['windows']}")
+                    
+                    # 현재 시간을 시작 시간 목록의 맨 앞에 추가
+                    current_time_str = datetime.now().strftime('%H:%M:%S')
+                    self.app_usage['dates'][current_date][app_name]['start_times'].insert(0, current_time_str)
+                    print(f"시작 시간 추가됨: {current_time_str}")
                     
                     self.active_app = app_name
                     self.active_window = window_title
                     self.active_start_time = current_time
+                    
+                    print(f"저장된 앱 데이터: {json.dumps(self.app_usage['dates'][current_date][app_name], indent=2)}")
                 
-                # 창 제목이 변경되었을 때
-                elif window_title != self.active_window:
-                    if self.active_app and self.active_start_time:
-                        elapsed_time = current_time - self.active_start_time
-                        if elapsed_time > 0:
-                            self.update_app_time(self.active_app, self.active_window, elapsed_time)
-                    self.active_window = window_title
-                    self.active_start_time = current_time
-                
-                # 동일한 앱/창이 계속 활성화되어 있을 때도 시간을 업데이트
-                elif self.active_app and self.active_start_time:
-                    elapsed_time = current_time - self.active_start_time
-                    if elapsed_time > 0:
-                        self.update_app_time(self.active_app, self.active_window, elapsed_time)
-                        self.active_start_time = current_time  # 시작 시간을 현재 시간으로 업데이트
-                
-                # 앱 목록 업데이트 (1초에 한 번)
-                if hasattr(self, '_last_time_update') and current_time - self._last_time_update >= self._update_interval:
-                    self._update_app_list()
-                    self._last_time_update = current_time
-            
         except Exception as e:
             print(f"앱 사용 통계 업데이트 중 오류 발생: {e}")
             traceback.print_exc()
@@ -479,6 +475,9 @@ class AppTrackingWidget(QWidget):
                     'windows': {},
                     'start_times': []
                 }
+            elif 'start_times' not in self.app_usage['dates'][current_date][app_name]:
+                # 기존 앱 데이터에 start_times 필드가 없으면 추가
+                self.app_usage['dates'][current_date][app_name]['start_times'] = []
             
             # 앱의 총 사용 시간 업데이트
             self.app_usage['dates'][current_date][app_name]['total_time'] += elapsed_time
@@ -740,7 +739,6 @@ class AppTrackingWidget(QWidget):
             
         except Exception as e:
             print(f"총 시간 업데이트 중 오류 발생: {e}")
-            import traceback
             traceback.print_exc()
 
     def format_time(self, seconds):
@@ -823,25 +821,41 @@ class AppTrackingWidget(QWidget):
             # 테이블 업데이트 시작
             self.detail_table.setRowCount(0)
             
-            # 창별 정보 추가
-            for window_title, window_time in windows.items():
-                if isinstance(window_title, tuple):
-                    window_title = window_title[1] if len(window_title) > 1 else window_title[0]
-                
+            # 현재 활성화된 창 가져오기
+            active_window = None
+            if app_name == self.active_app:
+                if isinstance(self.active_window, tuple):
+                    active_window = self.active_window[1]
+                else:
+                    active_window = self.active_window
+            
+            # 시작 시간 표시 (최신순)
+            for start_time in start_times:
                 row = self.detail_table.rowCount()
                 self.detail_table.insertRow(row)
                 
-                # 창 제목
-                title_item = QTableWidgetItem(window_title)
+                # 창 제목 설정
+                window_title = None
+                if windows:
+                    window_title = next(iter(windows))
+                elif active_window:
+                    window_title = active_window
+                else:
+                    window_title = "Unknown Window"
+                
+                title_item = QTableWidgetItem(str(window_title))
                 self.detail_table.setItem(row, 0, title_item)
                 
-                # 시작 시간 (가장 최근 시간 사용)
-                start_time = start_times[-1] if start_times else ""
+                # 시작 시간
                 time_item = QTableWidgetItem(start_time)
                 self.detail_table.setItem(row, 1, time_item)
                 
-                # 사용 시간
-                duration_item = QTableWidgetItem(self.format_time(window_time))
+                # 사용 시간 (현재 활성화된 앱이면 경과 시간 표시)
+                if app_name == self.active_app and self.active_start_time:
+                    elapsed = time.time() - self.active_start_time
+                    duration_item = QTableWidgetItem(self.format_time(elapsed))
+                else:
+                    duration_item = QTableWidgetItem("")
                 self.detail_table.setItem(row, 2, duration_item)
             
         except Exception as e:
@@ -1032,7 +1046,6 @@ class Home_app_tracking(AppTrackingWidget):
                             self.app_list.setCurrentItem(item)
                             # 상세 정보 업데이트
                             self._update_detail_view(current_app_name)
-                            break
                 
                 self._last_time_update = update_start
             else:
@@ -1116,25 +1129,41 @@ class Home_app_tracking(AppTrackingWidget):
             # 테이블 업데이트 시작
             self.detail_table.setRowCount(0)
             
-            # 창별 정보 추가
-            for window_title, window_time in windows.items():
-                if isinstance(window_title, tuple):
-                    window_title = window_title[1] if len(window_title) > 1 else window_title[0]
-                
+            # 현재 활성화된 창 가져오기
+            active_window = None
+            if app_name == self.active_app:
+                if isinstance(self.active_window, tuple):
+                    active_window = self.active_window[1]
+                else:
+                    active_window = self.active_window
+            
+            # 시작 시간 표시 (최신순)
+            for start_time in start_times:
                 row = self.detail_table.rowCount()
                 self.detail_table.insertRow(row)
                 
-                # 창 제목
-                title_item = QTableWidgetItem(window_title)
+                # 창 제목 설정
+                window_title = None
+                if windows:
+                    window_title = next(iter(windows))
+                elif active_window:
+                    window_title = active_window
+                else:
+                    window_title = "Unknown Window"
+                
+                title_item = QTableWidgetItem(str(window_title))
                 self.detail_table.setItem(row, 0, title_item)
                 
-                # 시작 시간 (가장 최근 시간 사용)
-                start_time = start_times[-1] if start_times else ""
+                # 시작 시간
                 time_item = QTableWidgetItem(start_time)
                 self.detail_table.setItem(row, 1, time_item)
                 
-                # 사용 시간
-                duration_item = QTableWidgetItem(self.format_time(window_time))
+                # 사용 시간 (현재 활성화된 앱이면 경과 시간 표시)
+                if app_name == self.active_app and self.active_start_time:
+                    elapsed = time.time() - self.active_start_time
+                    duration_item = QTableWidgetItem(self.format_time(elapsed))
+                else:
+                    duration_item = QTableWidgetItem("")
                 self.detail_table.setItem(row, 2, duration_item)
             
         except Exception as e:

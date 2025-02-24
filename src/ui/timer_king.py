@@ -1,9 +1,8 @@
 import time as time_module
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                            QPushButton, QLabel, QSystemTrayIcon, QMenu, QAction,
-                            QApplication)
+                            QPushButton, QLabel, QApplication)
 from PyQt5.QtCore import Qt, QTimer, QSettings
-from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtGui import QFont
 import os
 import json
 
@@ -14,9 +13,7 @@ from ui.widgets.home_widget import HomeWidget
 from ui.widgets.timer_widget import TimerWidget
 from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular
 import datetime
-import shutil
 import objc
-from subprocess import Popen, PIPE, TimeoutExpired
 import Cocoa
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -34,7 +31,6 @@ class TimerKing(QMainWindow):
         
         # 초기화 플래그
         self._is_shutting_down = False
-        self._pending_updates = False
         self._initialization_complete = False
         
         # 데이터 매니저 초기화
@@ -43,23 +39,15 @@ class TimerKing(QMainWindow):
         # 기본 데이터 초기화
         self.current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
         self.app_usage = {'dates': {self.current_date: {}}}
-        self.timer_data = {
-            'app_name': None,
-            'start_time': None,
-            'total_time': 0,
-            'is_active': False,
-            'windows': {},
-            'current_window': None,
-            'last_update': time_module.time()
-        }
+        self.timer_data = self._create_default_timer_data()
         
         # 캐시 및 상태 관리
         self._window_title_cache = {}
         self._app_list_cache = set()
         self._last_app_update = 0
         self._last_window_check = 0
-        self._window_check_interval = 1.0  # 0.5초에서 1초로 증가
-        self._app_cache_lifetime = 10.0  # 5초에서 10초로 증가
+        self._window_check_interval = 1.0
+        self._app_cache_lifetime = 10.0
         
         # 메모리 캐시 최적화
         self._memory_cache = {
@@ -74,17 +62,67 @@ class TimerKing(QMainWindow):
         }
         
         # 성능 최적화를 위한 설정
-        self._batch_size = 20  # 10에서 20으로 증가
-        self._min_update_interval = 0.2  # 0.1초에서 0.2초로 증가
+        self._batch_size = 20
+        self._min_update_interval = 0.2
         self._last_batch_process = 0
-        self._cache_cleanup_counter = 0  # 캐시 정리를 위한 카운터
+        self._cache_cleanup_counter = 0
         
         # UI 초기화
         self.initUI()
         
         # 비동기 초기화 시작
         self._start_async_initialization()
-        
+
+    def _create_default_timer_data(self):
+        """기본 타이머 데이터 구조를 생성합니다."""
+        return {
+            'app_name': None,
+            'start_time': None,
+            'total_time': 0,
+            'is_active': False,
+            'windows': {},
+            'current_window': None,
+            'last_update': time_module.time()
+        }
+
+    def _save_all_data(self):
+        """모든 데이터를 저장하고 종료 준비를 합니다."""
+        try:
+            print("앱 종료 중... 데이터 저장")
+            
+            # 현재 실행 중인 앱의 시간 업데이트
+            self.update_usage_stats()
+            
+            # 데이터 저장 전 현재 상태 출력
+            current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
+            print(f"저장할 데이터 확인 - 날짜: {current_date}")
+            if hasattr(self, 'app_usage') and 'dates' in self.app_usage and current_date in self.app_usage['dates']:
+                for app_name, data in self.app_usage['dates'][current_date].items():
+                    total_time = data.get('total_time', 0)
+                    print(f"- {app_name}: {self.format_time(total_time)}")
+            
+            # 모든 데이터 강제 저장
+            DataManager.force_save_all()
+            
+            # 저장 확인
+            if os.path.exists(APP_USAGE_FILE):
+                print(f"데이터 파일 저장됨: {APP_USAGE_FILE}")
+                print(f"파일 크기: {os.path.getsize(APP_USAGE_FILE)} bytes")
+            
+            print("데이터 저장 완료")
+            
+            # 타이머 중지
+            if hasattr(self, 'timer'):
+                self.timer.stop()
+            if hasattr(self, 'app_update_timer'):
+                self.app_update_timer.stop()
+            if hasattr(self, 'autosave_timer'):
+                self.autosave_timer.stop()
+                
+        except Exception as e:
+            print(f"앱 종료 중 오류 발생: {e}")
+            traceback.print_exc()
+
     def _start_async_initialization(self):
         """비동기적으로 앱 초기화를 수행합니다."""
         self.async_timer = QTimer(self)
@@ -415,51 +453,13 @@ class TimerKing(QMainWindow):
     def quitApp_(self, sender):
         """앱을 종료합니다."""
         try:
-            print("앱 종료 중... 데이터 저장")
-            
-            # 현재 실행 중인 앱의 시간 업데이트
-            self.update_usage_stats()
-            
-            # 데이터 저장 전 현재 상태 출력
-            current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
-            print(f"저장할 데이터 확인 - 날짜: {current_date}")
-            if hasattr(self, 'app_usage') and 'dates' in self.app_usage and current_date in self.app_usage['dates']:
-                for app_name, data in self.app_usage['dates'][current_date].items():
-                    total_time = data.get('total_time', 0)
-                    print(f"- {app_name}: {self.format_time(total_time)}")
-            
-            # 모든 데이터 강제 저장
-            DataManager.force_save_all()
-            
-            # 저장 확인 및 대기
-            max_retries = 5
-            retry_count = 0
-            while retry_count < max_retries:
-                if os.path.exists(APP_USAGE_FILE):
-                    file_size = os.path.getsize(APP_USAGE_FILE)
-                    print(f"데이터 파일 저장됨: {APP_USAGE_FILE}")
-                    print(f"파일 크기: {file_size} bytes")
-                    if file_size > 0:
-                        print("데이터 저장 완료")
-                        break
-                print("데이터 저장 대기 중...")
-                time_module.sleep(0.1)  # 100ms 대기
-                retry_count += 1
-            
-            # 타이머 중지
-            if hasattr(self, 'timer'):
-                self.timer.stop()
-            if hasattr(self, 'app_update_timer'):
-                self.app_update_timer.stop()
-            if hasattr(self, 'autosave_timer'):
-                self.autosave_timer.stop()
-            
+            if not self._is_shutting_down:
+                self._is_shutting_down = True
+                self._save_all_data()
         except Exception as e:
             print(f"앱 종료 중 오류 발생: {e}")
-            import traceback
             traceback.print_exc()
         finally:
-            # 앱 종료
             app = QApplication.instance()
             if app:
                 app.quit()
@@ -492,15 +492,7 @@ class TimerKing(QMainWindow):
 
     def reset_timer(self):
         # Timer 데이터 초기화
-        self.timer_data = {
-            'app_name': None,
-            'start_time': None,
-            'total_time': 0,
-            'is_active': False,
-            'windows': {},
-            'current_window': None,
-            'last_update': time_module.time()
-        }
+        self.timer_data = self._create_default_timer_data()
         # 화면 업데이트
         self.update_time_display()
 
@@ -526,15 +518,7 @@ class TimerKing(QMainWindow):
                 self.current_date = current_date
                 
                 # 타이머 초기화
-                self.timer_data = {
-                    'app_name': None,
-                    'start_time': None,
-                    'total_time': 0,
-                    'is_active': False,
-                    'windows': {},
-                    'current_window': None,
-                    'last_update': time_module.time()
-                }
+                self.timer_data = self._create_default_timer_data()
             
             # 현재 활성화된 앱의 시간 업데이트
             if self.timer_data['is_active'] and self.timer_data['app_name']:
@@ -632,15 +616,7 @@ class TimerKing(QMainWindow):
     def select_app(self, app_name):
         """앱을 선택하고 시간 트래킹을 시작합니다."""
         # Timer 데이터 초기화
-        self.timer_data = {
-            'app_name': app_name,
-            'start_time': None,
-            'total_time': 0,
-            'is_active': False,
-            'windows': {},
-            'current_window': None,
-            'last_update': time_module.time()
-        }
+        self.timer_data = self._create_default_timer_data()
         
         # 현재 앱이 활성화되어 있는지 확인
         active_app = NSWorkspace.sharedWorkspace().activeApplication()
@@ -698,41 +674,10 @@ class TimerKing(QMainWindow):
         try:
             if not self._is_shutting_down:
                 self._is_shutting_down = True
-                print("앱 종료 중... 데이터 저장")
-                
-                # 현재 실행 중인 앱의 시간 업데이트
-                self.update_usage_stats()
-                
-                # 데이터 저장 전 현재 상태 출력
-                current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
-                print(f"저장할 데이터 확인 - 날짜: {current_date}")
-                if hasattr(self, 'app_usage') and 'dates' in self.app_usage and current_date in self.app_usage['dates']:
-                    for app_name, data in self.app_usage['dates'][current_date].items():
-                        total_time = data.get('total_time', 0)
-                        print(f"- {app_name}: {self.format_time(total_time)}")
-                
-                # 모든 데이터 강제 저장
-                DataManager.force_save_all()
-                
-                # 저장 확인
-                if os.path.exists(APP_USAGE_FILE):
-                    print(f"데이터 파일 저장됨: {APP_USAGE_FILE}")
-                    print(f"파일 크기: {os.path.getsize(APP_USAGE_FILE)} bytes")
-                
-                print("데이터 저장 완료")
-                
-                # 타이머 중지
-                if hasattr(self, 'timer'):
-                    self.timer.stop()
-                if hasattr(self, 'app_update_timer'):
-                    self.app_update_timer.stop()
-                if hasattr(self, 'autosave_timer'):
-                    self.autosave_timer.stop()
-                
+                self._save_all_data()
                 event.accept()
         except Exception as e:
             print(f"앱 종료 중 오류 발생: {e}")
-            import traceback
             traceback.print_exc()
             event.accept()
 

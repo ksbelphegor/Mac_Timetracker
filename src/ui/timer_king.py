@@ -1,7 +1,7 @@
-import sys
-import time
+import time as time_module
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                            QPushButton, QLabel, QSystemTrayIcon, QMenu, QAction)
+                            QPushButton, QLabel, QSystemTrayIcon, QMenu, QAction,
+                            QApplication)
 from PyQt5.QtCore import Qt, QTimer, QSettings
 from PyQt5.QtGui import QIcon, QFont
 import os
@@ -18,10 +18,8 @@ import shutil
 import objc
 from subprocess import Popen, PIPE, TimeoutExpired
 import Cocoa
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-import threading
 
 class TimerKing(QMainWindow):
     def __init__(self):
@@ -42,26 +40,44 @@ class TimerKing(QMainWindow):
         # 데이터 매니저 초기화
         self.data_manager = DataManager.get_instance()
         
+        # 기본 데이터 초기화
+        self.current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
+        self.app_usage = {'dates': {self.current_date: {}}}
+        self.timer_data = {
+            'app_name': None,
+            'start_time': None,
+            'total_time': 0,
+            'is_active': False,
+            'windows': {},
+            'current_window': None,
+            'last_update': time_module.time()
+        }
+        
         # 캐시 및 상태 관리
         self._window_title_cache = {}
         self._app_list_cache = set()
         self._last_app_update = 0
         self._last_window_check = 0
-        self._window_check_interval = 0.5
-        self._app_cache_lifetime = 5.0
+        self._window_check_interval = 1.0  # 0.5초에서 1초로 증가
+        self._app_cache_lifetime = 10.0  # 5초에서 10초로 증가
         
-        # 메모리 캐시
+        # 메모리 캐시 최적화
         self._memory_cache = {
             'active_app': None,
             'window_title': None,
             'last_update': 0,
-            'last_ui_update': 0
+            'last_ui_update': 0,
+            'last_save': 0,
+            'pending_updates': set(),
+            'cache_hits': 0,
+            'cache_misses': 0
         }
         
-        # 기본 데이터 초기화
-        self.current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
-        self.app_usage = {'dates': {self.current_date: {}}}
-        self.timer_data = {}
+        # 성능 최적화를 위한 설정
+        self._batch_size = 20  # 10에서 20으로 증가
+        self._min_update_interval = 0.2  # 0.1초에서 0.2초로 증가
+        self._last_batch_process = 0
+        self._cache_cleanup_counter = 0  # 캐시 정리를 위한 카운터
         
         # UI 초기화
         self.initUI()
@@ -73,7 +89,7 @@ class TimerKing(QMainWindow):
         """비동기적으로 앱 초기화를 수행합니다."""
         self.async_timer = QTimer(self)
         self.async_timer.timeout.connect(self._async_init_step)
-        self.async_timer.start(100)  # 100ms 간격으로 초기화 단계 실행
+        self.async_timer.start(500)  # 500ms로 증가
         self._init_step = 0
         
     def _async_init_step(self):
@@ -151,23 +167,28 @@ class TimerKing(QMainWindow):
         # 타이머 설정
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_time)
-        self.timer.start(1000)  # 1초마다 업데이트
+        self.timer.start(1000)  # 1초로 설정
         
         # 앱 업데이트 타이머
         self.app_update_timer = QTimer(self)
         self.app_update_timer.timeout.connect(self.update_app_list)
-        self.app_update_timer.start(5000)  # 5초마다 업데이트
+        self.app_update_timer.start(10000)  # 10초 유지
+        
+        # 자동 저장 타이머 추가
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.timeout.connect(self.autosave_data)
+        self.autosave_timer.start(30000)  # 30초마다 저장
         
         # UI 업데이트 최적화를 위한 변수
         self._last_ui_update = 0
-        self._ui_update_interval = 0.5
+        self._ui_update_interval = 0.5  # 0.5초 유지
         
         # 파일 저장 최적화를 위한 변수
         self._last_save = 0
-        self._save_interval = 60
+        self._save_interval = 120  # 120초 유지
         self._data_changed = False
         
-        self.start_time = time.time()
+        self.start_time = time_module.time()
         
         # 스타일시트 설정
         self.setStyleSheet("""
@@ -195,10 +216,10 @@ class TimerKing(QMainWindow):
 
     def update_time(self):
         try:
-            if not self.timer_data['app_name']:
+            if not self.timer_data.get('app_name'):
                 return
                 
-            current_time = time.time()
+            current_time = time_module.time()
             
             # 메모리 캐시에서 앱 정보 가져오기
             if current_time - self._memory_cache['last_update'] < self._window_check_interval:
@@ -221,6 +242,7 @@ class TimerKing(QMainWindow):
                     if not self.timer_data['is_active']:
                         self.timer_data['start_time'] = current_time
                         self.timer_data['is_active'] = True
+                        self.timer_data['last_update'] = current_time
                     self.time_track_widget.time_frame.setStyleSheet("""
                         QFrame {
                             background-color: #CCE5FF;
@@ -233,6 +255,7 @@ class TimerKing(QMainWindow):
                         elapsed = current_time - self.timer_data['start_time']
                         self.timer_data['total_time'] += elapsed
                         self.timer_data['is_active'] = False
+                        self.timer_data['last_update'] = current_time
                     self.time_track_widget.time_frame.setStyleSheet("""
                         QFrame {
                             background-color: #FFCCCC;
@@ -240,17 +263,16 @@ class TimerKing(QMainWindow):
                             padding: 5px;
                         }
                     """)
-                self._pending_save = True
+                self._memory_cache['pending_updates'].add('timer_data')
             
-            # 시간 계산
-            if self.timer_data['is_active']:
-                elapsed = current_time - self.timer_data['start_time']
-                current_total = self.timer_data['total_time'] + elapsed
-            else:
-                current_total = self.timer_data['total_time']
-            
-            # UI 업데이트 (1초에 한 번)
-            if current_time - self._memory_cache['last_ui_update'] >= 1.0:
+            # 시간 계산 및 UI 업데이트 최적화
+            if current_time - self._memory_cache['last_ui_update'] >= self._min_update_interval:
+                if self.timer_data['is_active']:
+                    elapsed = current_time - self.timer_data['start_time']
+                    current_total = self.timer_data['total_time'] + elapsed
+                else:
+                    current_total = self.timer_data['total_time']
+                
                 hours = int(current_total // 3600)
                 minutes = int((current_total % 3600) // 60)
                 seconds = int(current_total % 60)
@@ -262,66 +284,92 @@ class TimerKing(QMainWindow):
                 
                 self._memory_cache['last_ui_update'] = current_time
             
-            # 데이터 저장 (30초마다)
-            if self._pending_save and current_time - getattr(self, '_last_save_time', 0) >= 30.0:
-                self.data_manager.save_timer_data(self.timer_data)
-                self._last_save_time = current_time
-                self._pending_save = False
+            # 배치 처리로 데이터 저장 최적화
+            if (len(self._memory_cache['pending_updates']) >= self._batch_size or 
+                (self._memory_cache['pending_updates'] and 
+                 current_time - self._last_batch_process >= 30.0)):
+                self._process_pending_updates()
                 
         except Exception as e:
             print(f"Error in update_time: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _process_pending_updates(self):
+        """배치로 대기 중인 업데이트를 처리합니다."""
+        try:
+            current_time = time_module.time()
+            if 'timer_data' in self._memory_cache['pending_updates']:
+                self.data_manager.save_timer_data(self.timer_data)
+            self._memory_cache['pending_updates'].clear()
+            self._last_batch_process = current_time
+        except Exception as e:
+            print(f"Error in _process_pending_updates: {e}")
 
     def get_active_window_title(self):
-        current_time = time.time()
-        
+        """현재 활성 창의 제목을 가져옵니다."""
         try:
-            # 캐시된 윈도우 타이틀이 유효한 경우 사용
-            if (current_time - self._memory_cache['last_update'] < self._window_check_interval and
-                self._memory_cache['window_title'] is not None):
-                return self._memory_cache['window_title']
-            
             # Home 화면과 Timer 창 확인
             if self.isActiveWindow():
-                self._update_window_cache("Home", current_time)
-                return "Home"
+                return "Home", "Home"
             elif hasattr(self, 'time_track_widget') and self.time_track_widget.isActiveWindow():
-                self._update_window_cache("Timer", current_time)
-                return "Timer"
+                return "Timer", "Timer"
             
-            active_app = NSWorkspace.sharedWorkspace().activeApplication()
+            workspace = NSWorkspace.sharedWorkspace()
+            active_app = workspace.activeApplication()
             if not active_app:
-                self._update_window_cache("Unknown", current_time)
-                return "Unknown"
+                return None, None
             
-            app_name = active_app.get('NSApplicationName', '')
-            active_pid = active_app.get('NSApplicationProcessIdentifier', 0)
+            app_name = active_app['NSApplicationName']
             
             # 우리 앱인 경우
-            if active_pid == self.our_pid:
+            if active_app['NSApplicationProcessIdentifier'] == self.our_pid:
                 window_title = "Home" if self.isActiveWindow() else "Timer"
-                self._update_window_cache(window_title, current_time)
-                return window_title
+                return app_name, window_title
             
-            # 캐시된 타이틀 확인
-            cache_key = f"{app_name}_{active_pid}"
+            # 시스템 앱은 제외
+            skip_apps = {'Finder', 'SystemUIServer', 'loginwindow', 'Dock', 'Control Center', 'Notification Center'}
+            if app_name in skip_apps:
+                return app_name, app_name
+            
+            # 캐시 확인
+            cache_key = f"{app_name}_{active_app['NSApplicationProcessIdentifier']}"
+            current_time = time_module.time()
+            
             if (cache_key in self._window_title_cache and 
-                current_time - self._window_title_cache[cache_key]['time'] < 5.0):
-                window_title = self._window_title_cache[cache_key]['title']
-                self._update_window_cache(window_title, current_time)
-                return window_title
+                current_time - self._window_title_cache[cache_key]['time'] < 10.0):  # 5초에서 10초로 증가
+                self._memory_cache['cache_hits'] += 1
+                return app_name, self._window_title_cache[cache_key]['title']
             
-            # AppleScript는 마지막 수단으로만 사용
+            self._memory_cache['cache_misses'] += 1
+            
+            # 캐시 업데이트
             window_title = app_name
             self._window_title_cache[cache_key] = {
-                'time': current_time,
-                'title': window_title
+                'title': window_title,
+                'time': current_time
             }
-            self._update_window_cache(window_title, current_time)
-            return window_title
+            
+            # 주기적으로 캐시 정리 (100회마다)
+            self._cache_cleanup_counter += 1
+            if self._cache_cleanup_counter >= 100:
+                self._cleanup_cache()
+                self._cache_cleanup_counter = 0
+            
+            return app_name, window_title
             
         except Exception as e:
-            print(f"Error getting window title: {e}")
-            return "Unknown"
+            print(f"활성 창 정보 가져오기 실패: {e}")
+            return None, None
+
+    def _cleanup_cache(self):
+        """오래된 캐시 항목을 정리합니다."""
+        current_time = time_module.time()
+        # 30초 이상 된 캐시 항목 제거
+        self._window_title_cache = {
+            k: v for k, v in self._window_title_cache.items()
+            if current_time - v['time'] < 30.0
+        }
 
     def _update_window_cache(self, title, time):
         """윈도우 타이틀 메모리 캐시를 업데이트합니다."""
@@ -365,7 +413,56 @@ class TimerKing(QMainWindow):
 
     @objc.python_method
     def quitApp_(self, sender):
-        QApplication.instance().quit()
+        """앱을 종료합니다."""
+        try:
+            print("앱 종료 중... 데이터 저장")
+            
+            # 현재 실행 중인 앱의 시간 업데이트
+            self.update_usage_stats()
+            
+            # 데이터 저장 전 현재 상태 출력
+            current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
+            print(f"저장할 데이터 확인 - 날짜: {current_date}")
+            if hasattr(self, 'app_usage') and 'dates' in self.app_usage and current_date in self.app_usage['dates']:
+                for app_name, data in self.app_usage['dates'][current_date].items():
+                    total_time = data.get('total_time', 0)
+                    print(f"- {app_name}: {self.format_time(total_time)}")
+            
+            # 모든 데이터 강제 저장
+            DataManager.force_save_all()
+            
+            # 저장 확인 및 대기
+            max_retries = 5
+            retry_count = 0
+            while retry_count < max_retries:
+                if os.path.exists(APP_USAGE_FILE):
+                    file_size = os.path.getsize(APP_USAGE_FILE)
+                    print(f"데이터 파일 저장됨: {APP_USAGE_FILE}")
+                    print(f"파일 크기: {file_size} bytes")
+                    if file_size > 0:
+                        print("데이터 저장 완료")
+                        break
+                print("데이터 저장 대기 중...")
+                time_module.sleep(0.1)  # 100ms 대기
+                retry_count += 1
+            
+            # 타이머 중지
+            if hasattr(self, 'timer'):
+                self.timer.stop()
+            if hasattr(self, 'app_update_timer'):
+                self.app_update_timer.stop()
+            if hasattr(self, 'autosave_timer'):
+                self.autosave_timer.stop()
+            
+        except Exception as e:
+            print(f"앱 종료 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            # 앱 종료
+            app = QApplication.instance()
+            if app:
+                app.quit()
 
     def show_timer(self):
         """Timer 창을 표시합니다."""
@@ -376,7 +473,7 @@ class TimerKing(QMainWindow):
             return
         
         # 앱 리스트가 오래되었으면 업데이트
-        current_time = time.time()
+        current_time = time_module.time()
         if current_time - self._last_app_update >= self._app_cache_lifetime:
             self.update_app_list()
             
@@ -399,15 +496,21 @@ class TimerKing(QMainWindow):
             'app_name': None,
             'start_time': None,
             'total_time': 0,
-            'is_active': False
+            'is_active': False,
+            'windows': {},
+            'current_window': None,
+            'last_update': time_module.time()
         }
         # 화면 업데이트
         self.update_time_display()
 
     def update_usage_stats(self):
-        """앱 사용 통계를 업데이트합니다."""
+        """현재 실행 중인 앱의 시간을 업데이트합니다."""
         try:
-            current_time = time.time()
+            if not self.timer_data.get('is_active', False) or not self.timer_data.get('app_name'):
+                return
+                
+            current_time = time_module.time()
             current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
             
             # 날짜가 변경되었는지 확인
@@ -427,7 +530,10 @@ class TimerKing(QMainWindow):
                     'app_name': None,
                     'start_time': None,
                     'total_time': 0,
-                    'is_active': False
+                    'is_active': False,
+                    'windows': {},
+                    'current_window': None,
+                    'last_update': time_module.time()
                 }
             
             # 현재 활성화된 앱의 시간 업데이트
@@ -450,7 +556,7 @@ class TimerKing(QMainWindow):
                 self.app_usage['dates'][current_date][app_name]['last_update'] = current_time
                 
                 # 현재 창 시간 업데이트
-                window_title = self.get_active_window_title()
+                window_title = self.get_active_window_title()[1]
                 if window_title:
                     if window_title not in self.app_usage['dates'][current_date][app_name]['windows']:
                         self.app_usage['dates'][current_date][app_name]['windows'][window_title] = 0
@@ -465,8 +571,7 @@ class TimerKing(QMainWindow):
             
         except Exception as e:
             print(f"통계 업데이트 중 오류 발생: {e}")
-            import traceback
-            print(traceback.format_exc())
+            traceback.print_exc()
 
     def save_app_usage(self):
         """앱 사용 통계를 저장합니다."""
@@ -491,35 +596,38 @@ class TimerKing(QMainWindow):
         # Timer 위젯이 있으면 업데이트
         if hasattr(self, 'time_track_widget'):
             # 현재 창 시간과 전체 시간을 함께 전달
-            window_time = time.time() - self.timer_data.get('start_time', 0) if self.timer_data['is_active'] else 0
+            window_time = time_module.time() - self.timer_data.get('start_time', 0) if self.timer_data['is_active'] else 0
             self.time_track_widget.update_time_display(time_text, self.format_time(window_time), self.timer_data['app_name'])
 
     def update_app_list(self):
-        current_time = time.time()
+        """실행 중인 앱 목록을 업데이트합니다."""
+        current_time = time_module.time()
         
         # 캐시가 유효한 경우 캐시된 앱 리스트 사용
         if (current_time - self._last_app_update < self._app_cache_lifetime and 
             self._app_list_cache):
-            self.running_apps = self._app_list_cache
-        else:
-            # 캐시가 만료되었거나 비어있는 경우 앱 리스트 업데이트
-            self.running_apps = set()
-            for app in NSWorkspace.sharedWorkspace().runningApplications():
-                if app.activationPolicy() == NSApplicationActivationPolicyRegular:
-                    app_name = app.localizedName()
-                    if app_name:
-                        self.running_apps.add(app_name)
-            
-            # 캐시 업데이트
-            self._app_list_cache = self.running_apps.copy()
-            self._last_app_update = current_time
+            return
         
-        # Timer 창의 콤보박스 업데이트 (재귀 호출 방지)
-        if hasattr(self, 'time_track_widget'):
-            current_app = self.timer_data.get('app_name')  # timer_data에서 현재 앱 이름을 가져옴
-            self.time_track_widget.app_combo.blockSignals(True)  # 시그널 일시 차단
-            self.time_track_widget.update_app_list(self.running_apps, current_app)
-            self.time_track_widget.app_combo.blockSignals(False)  # 시그널 복원
+        # 앱 리스트 업데이트
+        new_apps = set()
+        for app in NSWorkspace.sharedWorkspace().runningApplications():
+            if app.activationPolicy() == NSApplicationActivationPolicyRegular:
+                app_name = app.localizedName()
+                if app_name:
+                    new_apps.add(app_name)
+        
+        # 변경사항이 있을 때만 업데이트
+        if new_apps != self._app_list_cache:
+            self.running_apps = new_apps
+            self._app_list_cache = new_apps.copy()
+            self._last_app_update = current_time
+            
+            # Timer 창의 콤보박스 업데이트
+            if hasattr(self, 'time_track_widget'):
+                current_app = self.timer_data.get('app_name')
+                self.time_track_widget.app_combo.blockSignals(True)
+                self.time_track_widget.update_app_list(self.running_apps, current_app)
+                self.time_track_widget.app_combo.blockSignals(False)
 
     def select_app(self, app_name):
         """앱을 선택하고 시간 트래킹을 시작합니다."""
@@ -528,7 +636,10 @@ class TimerKing(QMainWindow):
             'app_name': app_name,
             'start_time': None,
             'total_time': 0,
-            'is_active': False
+            'is_active': False,
+            'windows': {},
+            'current_window': None,
+            'last_update': time_module.time()
         }
         
         # 현재 앱이 활성화되어 있는지 확인
@@ -537,7 +648,7 @@ class TimerKing(QMainWindow):
         
         # UI 업데이트
         if is_target_app_active:
-            self.timer_data['start_time'] = time.time()
+            self.timer_data['start_time'] = time_module.time()
             self.timer_data['is_active'] = True
             self.time_track_widget.time_frame.setStyleSheet("""
                 QFrame {
@@ -587,8 +698,55 @@ class TimerKing(QMainWindow):
         try:
             if not self._is_shutting_down:
                 self._is_shutting_down = True
+                print("앱 종료 중... 데이터 저장")
+                
+                # 현재 실행 중인 앱의 시간 업데이트
+                self.update_usage_stats()
+                
+                # 데이터 저장 전 현재 상태 출력
+                current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
+                print(f"저장할 데이터 확인 - 날짜: {current_date}")
+                if hasattr(self, 'app_usage') and 'dates' in self.app_usage and current_date in self.app_usage['dates']:
+                    for app_name, data in self.app_usage['dates'][current_date].items():
+                        total_time = data.get('total_time', 0)
+                        print(f"- {app_name}: {self.format_time(total_time)}")
+                
+                # 모든 데이터 강제 저장
                 DataManager.force_save_all()
+                
+                # 저장 확인
+                if os.path.exists(APP_USAGE_FILE):
+                    print(f"데이터 파일 저장됨: {APP_USAGE_FILE}")
+                    print(f"파일 크기: {os.path.getsize(APP_USAGE_FILE)} bytes")
+                
+                print("데이터 저장 완료")
+                
+                # 타이머 중지
+                if hasattr(self, 'timer'):
+                    self.timer.stop()
+                if hasattr(self, 'app_update_timer'):
+                    self.app_update_timer.stop()
+                if hasattr(self, 'autosave_timer'):
+                    self.autosave_timer.stop()
+                
                 event.accept()
         except Exception as e:
-            print(f"Error in closeEvent: {e}")
+            print(f"앱 종료 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
             event.accept()
+
+    def autosave_data(self):
+        """30초마다 데이터를 자동 저장합니다."""
+        try:
+            # 현재 실행 중인 앱의 시간 업데이트
+            self.update_usage_stats()
+            
+            # 데이터 저장
+            if hasattr(self, 'app_usage') and hasattr(self, 'timer_data'):
+                self.data_manager.save_app_usage(self.app_usage)
+                self.data_manager.save_timer_data(self.timer_data)
+                
+        except Exception as e:
+            print(f"자동 저장 중 오류 발생: {e}")
+            traceback.print_exc()

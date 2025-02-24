@@ -13,12 +13,12 @@ class HomeWidget(QWidget):
         button_layout = QHBoxLayout(button_container)
         button_layout.setContentsMargins(0, 10, 0, 0)
         
-        quit_button = QPushButton("Quit", self)
-        quit_button.clicked.connect(QApplication.instance().quit)
-        quit_button.setFixedWidth(100)
+        close_button = QPushButton("Close", self)
+        close_button.clicked.connect(self.parent().hide)
+        close_button.setFixedWidth(100)
         
         button_layout.addStretch()
-        button_layout.addWidget(quit_button)
+        button_layout.addWidget(close_button)
         
         layout.addWidget(self.home_app_tracking, 1)
         layout.addWidget(button_container)

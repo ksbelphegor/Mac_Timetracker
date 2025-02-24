@@ -1,5 +1,6 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget, 
-                            QTreeWidgetItem, QTreeWidgetItemIterator, QHeaderView, QSizePolicy, QToolTip)
+                            QTreeWidgetItem, QTreeWidgetItemIterator, QHeaderView, QSizePolicy, QToolTip,
+                            QListWidget, QTableWidget, QTableWidgetItem, QListWidgetItem)
 from PyQt5.QtCore import QTimer, Qt, QRect, QPoint
 from PyQt5.QtGui import QFont, QPainter, QColor, QPen
 import time
@@ -442,42 +443,22 @@ class AppTrackingWidget(QWidget):
                         self.update_app_time(self.active_app, self.active_window, elapsed_time)
                         self.active_start_time = current_time  # 시작 시간을 현재 시간으로 업데이트
                 
-                # 트리 업데이트 요청 (2초에 한 번만)
-                if current_time - self._last_tree_update >= self._tree_update_interval:
-                    self.save_expanded_state()  # 현재 확장 상태 저장
-                    self.update_tree_widget()
-                    self._last_tree_update = current_time
+                # 앱 목록 업데이트 (1초에 한 번)
+                if hasattr(self, '_last_time_update') and current_time - self._last_time_update >= self._update_interval:
+                    self._update_app_list()
+                    self._last_time_update = current_time
             
         except Exception as e:
             print(f"앱 사용 통계 업데이트 중 오류 발생: {e}")
             traceback.print_exc()
 
     def save_expanded_state(self):
-        """현재 트리 위젯의 확장 상태를 저장합니다."""
-        self._expanded_items.clear()
-        iterator = QTreeWidgetItemIterator(self.tree_widget)
-        while iterator.value():
-            item = iterator.value()
-            if item:
-                # 앱 이름과 창 제목을 조합하여 고유 키 생성
-                key = item.text(0)
-                if item.parent():
-                    key = f"{item.parent().text(0)}::{key}"
-                self._expanded_items[key] = item.isExpanded()
-            iterator += 1
+        """더 이상 tree widget을 사용하지 않으므로 빈 메서드로 유지"""
+        pass
 
     def restore_expanded_state(self):
-        """저장된 확장 상태를 복원합니다."""
-        iterator = QTreeWidgetItemIterator(self.tree_widget)
-        while iterator.value():
-            item = iterator.value()
-            if item:
-                key = item.text(0)
-                if item.parent():
-                    key = f"{item.parent().text(0)}::{key}"
-                if key in self._expanded_items:
-                    item.setExpanded(self._expanded_items[key])
-            iterator += 1
+        """더 이상 tree widget을 사용하지 않으므로 빈 메서드로 유지"""
+        pass
 
     def update_app_time(self, app_name=None, window_title=None, elapsed_time=None):
         """앱 사용 시간을 업데이트합니다."""
@@ -775,9 +756,145 @@ class AppTrackingWidget(QWidget):
             print(f"시간 포맷팅 중 오류 발생: {e}")
             return "00:00:00"
 
+    def _update_app_list(self):
+        """앱 목록을 업데이트합니다."""
+        try:
+            current_date = datetime.now().date().strftime('%Y-%m-%d')
+            if current_date not in self.app_usage['dates']:
+                return
+            
+            # 현재 선택된 앱 저장
+            current_app = self.app_list.currentItem()
+            current_app_name = current_app.data(Qt.UserRole) if current_app else None
+            
+            # 목록 업데이트 시작
+            self.app_list.blockSignals(True)
+            self.app_list.clear()
+            
+            # 앱 데이터 정렬 (사용 시간 기준)
+            app_data = []
+            for app_name, data in self.app_usage['dates'][current_date].items():
+                if app_name == APP_NAME:
+                    continue
+                total_time = sum(window_time for window_time in data.get('windows', {}).values())
+                app_data.append((app_name, total_time))
+            
+            app_data.sort(key=lambda x: x[1], reverse=True)
+            
+            # 앱 목록 추가
+            selected_item = None
+            for app_name, total_time in app_data:
+                item = QListWidgetItem()
+                item.setText(f"{app_name} ({self.format_time(total_time)})")
+                item.setData(Qt.UserRole, app_name)
+                self.app_list.addItem(item)
+                
+                # 이전에 선택된 앱과 같은 앱이면 저장
+                if app_name == current_app_name:
+                    selected_item = item
+            
+            # 이전 선택 복원
+            if selected_item:
+                self.app_list.setCurrentItem(selected_item)
+            
+            self.app_list.blockSignals(False)
+            
+        except Exception as e:
+            print(f"앱 목록 업데이트 중 오류 발생: {e}")
+            traceback.print_exc()
+
+    def _on_app_selected(self, current, previous):
+        """앱이 선택되었을 때 호출됩니다."""
+        if current:
+            app_name = current.data(Qt.UserRole)
+            self._update_detail_view(app_name)
+
+    def _update_detail_view(self, app_name):
+        """선택된 앱의 상세 정보를 업데이트합니다."""
+        try:
+            current_date = datetime.now().date().strftime('%Y-%m-%d')
+            if current_date not in self.app_usage['dates'] or app_name not in self.app_usage['dates'][current_date]:
+                return
+            
+            app_data = self.app_usage['dates'][current_date][app_name]
+            windows = app_data.get('windows', {})
+            start_times = app_data.get('start_times', [])
+            
+            # 테이블 업데이트 시작
+            self.detail_table.setRowCount(0)
+            
+            # 창별 정보 추가
+            for window_title, window_time in windows.items():
+                if isinstance(window_title, tuple):
+                    window_title = window_title[1] if len(window_title) > 1 else window_title[0]
+                
+                row = self.detail_table.rowCount()
+                self.detail_table.insertRow(row)
+                
+                # 창 제목
+                title_item = QTableWidgetItem(window_title)
+                self.detail_table.setItem(row, 0, title_item)
+                
+                # 시작 시간 (가장 최근 시간 사용)
+                start_time = start_times[-1] if start_times else ""
+                time_item = QTableWidgetItem(start_time)
+                self.detail_table.setItem(row, 1, time_item)
+                
+                # 사용 시간
+                duration_item = QTableWidgetItem(self.format_time(window_time))
+                self.detail_table.setItem(row, 2, duration_item)
+            
+        except Exception as e:
+            print(f"상세 정보 업데이트 중 오류 발생: {e}")
+            traceback.print_exc()
+
+    def setup_style(self):
+        # 다크 테마 스타일
+        dark_style = """
+            QWidget {
+                background-color: #1E1E1E;
+                color: white;
+            }
+            QListWidget {
+                background-color: #2C2C2C;
+                border: none;
+                padding: 5px;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-bottom: 1px solid #3C3C3C;
+            }
+            QListWidget::item:selected {
+                background-color: #404040;
+            }
+            QTableWidget {
+                background-color: #2C2C2C;
+                border: none;
+                gridline-color: #3C3C3C;
+            }
+            QTableWidget::item {
+                padding: 8px;
+            }
+            QHeaderView::section {
+                background-color: #2C2C2C;
+                color: white;
+                padding: 8px;
+                border: 1px solid #3C3C3C;
+            }
+            QLabel {
+                color: white;
+            }
+        """
+        self.setStyleSheet(dark_style)
+
 class Home_app_tracking(AppTrackingWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        
+        # 초기화 변수 설정
+        self._last_time_update = time.time()
+        self._update_interval = 1.0
+        self.tree_widget = None  # tree_widget 사용하지 않음
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
@@ -786,23 +903,15 @@ class Home_app_tracking(AppTrackingWidget):
         self._init_ui(layout)
         
         # 타이머 설정
-        self.timer.setInterval(1000)  # 업데이트 간격을 1초로 늘림
+        self.timer.setInterval(1000)
         
         # 그래프 업데이트 타이머
         self.graph_timer = QTimer(self)
         self.graph_timer.timeout.connect(self._update_graph)
-        self.graph_timer.start(1000)  # 1초마다 그래프 업데이트
+        self.graph_timer.start(1000)
         
         # 초기 데이터 업데이트
         self._update_graph()
-        
-        # 마지막 업데이트 시간 초기화
-        self._last_time_update = time.time()
-        
-        # 트리 업데이트 최적화를 위한 변수
-        self._last_tree_update = 0
-        self._tree_update_interval = 2.0  # 트리 업데이트 간격을 2초로 설정
-        self._pending_tree_update = False  # 트리 업데이트 대기 상태 초기화
 
     def _init_ui(self, layout):
         # Total 시간과 그래프를 포함하는 컨테이너
@@ -831,146 +940,69 @@ class Home_app_tracking(AppTrackingWidget):
         total_graph_layout.addWidget(total_container)
         total_graph_layout.addWidget(self.time_graph)
         
-        # 트리 위젯 설정
-        self.tree_widget = QTreeWidget()
-        self.tree_widget.setHeaderHidden(False)
-        self.tree_widget.setColumnCount(4)
-        self.tree_widget.setHeaderLabels(["Name", "Start", "End", "Time"])
-        self.tree_widget.setUniformRowHeights(True)
-        self.tree_widget.setItemsExpandable(True)
-        self.tree_widget.setSortingEnabled(False)
+        # 앱 목록과 상세 정보를 포함할 컨테이너
+        content_container = QWidget()
+        content_layout = QHBoxLayout(content_container)
+        content_layout.setContentsMargins(0, 0, 0, 0)
         
-        # 트리 위젯 성능 최적화 설정
-        self.tree_widget.setVerticalScrollMode(QTreeWidget.ScrollPerPixel)
-        self.tree_widget.setHorizontalScrollMode(QTreeWidget.ScrollPerPixel)
-        self.tree_widget.setAttribute(Qt.WA_OpaquePaintEvent)
-        self.tree_widget.viewport().setAttribute(Qt.WA_OpaquePaintEvent)
+        # 앱 목록 (왼쪽)
+        app_list_container = QWidget()
+        app_list_layout = QVBoxLayout(app_list_container)
+        app_list_layout.setContentsMargins(0, 0, 0, 0)
         
-        # 트리 확장/축소 이벤트 연결
-        self.tree_widget.itemExpanded.connect(self.on_item_expanded)
-        self.tree_widget.itemCollapsed.connect(self.on_item_collapsed)
+        # 앱 목록 레이블
+        app_list_label = QLabel("Applications")
+        app_list_label.setFont(QFont("Arial", 16, QFont.Bold))
+        app_list_layout.addWidget(app_list_label)
         
-        # 헤더 설정
-        header = self.tree_widget.header()
-        header.setSectionsMovable(True)
-        header.setSectionResizeMode(0, QHeaderView.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.Interactive)
-        header.setSectionResizeMode(3, QHeaderView.Interactive)
-        self.tree_widget.setColumnWidth(0, 400)  # Name 열 너비
-        self.tree_widget.setColumnWidth(1, 100)  # Start 열 너비
-        self.tree_widget.setColumnWidth(2, 100)  # End 열 너비
-        self.tree_widget.setColumnWidth(3, 100)  # Time 열 너비
+        # 앱 목록 위젯
+        self.app_list = QListWidget()
+        self.app_list.setFont(QFont("Arial", 14))
+        self.app_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        self.app_list.setHorizontalScrollMode(QListWidget.ScrollPerPixel)
+        self.app_list.setUniformItemSizes(True)
+        self.app_list.currentItemChanged.connect(self._on_app_selected)
+        app_list_layout.addWidget(self.app_list)
         
-        # 정렬 설정
-        self.sort_column = 3  # Time 열을 기본 정렬 열로 설정
-        self.sort_order = Qt.DescendingOrder
-        self.tree_widget.header().sectionClicked.connect(self.on_header_clicked)
+        # 상세 정보 패널 (오른쪽)
+        detail_container = QWidget()
+        detail_layout = QVBoxLayout(detail_container)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 상세 정보 레이블
+        detail_label = QLabel("Details")
+        detail_label.setFont(QFont("Arial", 16, QFont.Bold))
+        detail_layout.addWidget(detail_label)
+        
+        # 상세 정보 테이블
+        self.detail_table = QTableWidget()
+        self.detail_table.setColumnCount(3)
+        self.detail_table.setHorizontalHeaderLabels(["Window", "Start Time", "Duration"])
+        self.detail_table.setFont(QFont("Arial", 14))
+        self.detail_table.verticalHeader().setVisible(False)
+        self.detail_table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
+        self.detail_table.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
+        
+        # 테이블 헤더 설정
+        header = self.detail_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.detail_table.setColumnWidth(1, 100)
+        self.detail_table.setColumnWidth(2, 100)
+        
+        detail_layout.addWidget(self.detail_table)
+        
+        # 컨테이너에 위젯 추가
+        content_layout.addWidget(app_list_container, 1)
+        content_layout.addWidget(detail_container, 2)
+        
+        # 메인 레이아웃에 위젯 추가
+        layout.addWidget(total_graph_container)
+        layout.addWidget(content_container)
         
         # 스타일 설정
         self.setup_style()
-        
-        # 레이아웃에 위젯 추가
-        layout.addWidget(total_graph_container)
-        layout.addWidget(self.tree_widget)
-
-    def on_item_expanded(self, item):
-        """아이템이 확장될 때 호출되는 메서드"""
-        key = self.get_item_key(item)
-        self._expanded_items[key] = True
-
-    def on_item_collapsed(self, item):
-        """아이템이 축소될 때 호출되는 메서드"""
-        key = self.get_item_key(item)
-        self._expanded_items[key] = False
-
-    def get_item_key(self, item):
-        """트리 아이템의 고유 키를 생성"""
-        if item.parent():
-            parent_text = item.parent().text(0)
-            return f"{parent_text}::{item.text(0)}"
-        return item.text(0)
-
-    def save_expanded_state(self):
-        """현재 트리 위젯의 확장 상태를 저장합니다."""
-        self._expanded_items.clear()
-        iterator = QTreeWidgetItemIterator(self.tree_widget)
-        while iterator.value():
-            item = iterator.value()
-            if item:
-                key = self.get_item_key(item)
-                self._expanded_items[key] = item.isExpanded()
-            iterator += 1
-
-    def restore_expanded_state(self):
-        """저장된 확장 상태를 복원합니다."""
-        iterator = QTreeWidgetItemIterator(self.tree_widget)
-        while iterator.value():
-            item = iterator.value()
-            if item:
-                key = self.get_item_key(item)
-                if key in self._expanded_items:
-                    item.setExpanded(self._expanded_items[key])
-            iterator += 1
-
-    def update_tree_widget(self):
-        """트리 위젯의 내용을 업데이트합니다."""
-        try:
-            current_date = datetime.now().date().strftime('%Y-%m-%d')
-            if current_date not in self.app_usage['dates']:
-                return
-
-            # 현재 선택된 정렬 열과 정렬 순서 저장
-            header = self.tree_widget.header()
-            sort_column = header.sortIndicatorSection()
-            sort_order = header.sortIndicatorOrder()
-
-            # 트리가 비어있을 때만 새로 생성
-            if self.tree_widget.topLevelItemCount() == 0:
-                self.tree_widget.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
-                self.create_tree_items()
-                self.tree_widget.setUpdatesEnabled(True)  # UI 업데이트 재개
-            else:
-                # 확장 상태 저장
-                self.save_expanded_state()
-                
-                # 트리 아이템 업데이트
-                self.tree_widget.setUpdatesEnabled(False)  # UI 업데이트 일시 중지
-                self.update_tree_items()
-                
-                # 확장 상태 복원
-                self.restore_expanded_state()
-                self.tree_widget.setUpdatesEnabled(True)  # UI 업데이트 재개
-
-            # 이전 정렬 상태 복원
-            self.tree_widget.sortItems(sort_column, sort_order)
-            
-            # 총 사용 시간 업데이트
-            self.update_total_time()
-            
-            # 데이터 저장
-            self.data_manager.save_app_usage(self.app_usage)
-            
-        except Exception as e:
-            print(f"트리 위젯 업데이트 중 오류 발생: {e}")
-            traceback.print_exc()
-
-    def _handle_item_expanded(self, item):
-        """트리 아이템이 확장될 때 호출됩니다."""
-        self._request_tree_update()
-
-    def _handle_item_collapsed(self, item):
-        """트리 아이템이 축소될 때 호출됩니다."""
-        self._request_tree_update()
-
-    def _request_tree_update(self):
-        """트리 업데이트를 요청합니다."""
-        current_time = time.time()
-        if current_time - self._last_tree_update >= self._tree_update_interval:
-            self.update_tree_widget()
-            self._last_tree_update = current_time
-        else:
-            self._pending_tree_update = True
 
     def _update_graph(self):
         """그래프와 UI를 업데이트합니다."""
@@ -978,65 +1010,172 @@ class Home_app_tracking(AppTrackingWidget):
             if not hasattr(self, 'time_graph') or not hasattr(self, 'app_usage'):
                 return
             
-            current_time = time.time()
+            update_start = time.time()
             
             # 그래프 데이터 업데이트
             self.time_graph.update_data(self.app_usage)
             
-            # 트리 위젯 업데이트 (대기 중인 업데이트가 있거나 마지막 업데이트로부터 일정 시간이 지났을 때)
-            if self._pending_tree_update or (current_time - self._last_tree_update >= self._tree_update_interval):
-                self.update_tree_widget()
-                self._last_tree_update = current_time
-                self._pending_tree_update = False
+            # 앱 목록과 상세 정보 업데이트
+            if update_start - self._last_time_update >= self._update_interval:
+                # 현재 선택된 앱 저장
+                current_app = self.app_list.currentItem()
+                current_app_name = current_app.data(Qt.UserRole) if current_app else None
+                
+                # 앱 목록 업데이트
+                self._update_app_list()
+                
+                # 선택된 앱이 있었다면 다시 선택
+                if current_app_name:
+                    for i in range(self.app_list.count()):
+                        item = self.app_list.item(i)
+                        if item.data(Qt.UserRole) == current_app_name:
+                            self.app_list.setCurrentItem(item)
+                            # 상세 정보 업데이트
+                            self._update_detail_view(current_app_name)
+                            break
+                
+                self._last_time_update = update_start
+            else:
+                # 업데이트 간격이 아니더라도 선택된 앱의 상세 정보는 업데이트
+                current_app = self.app_list.currentItem()
+                if current_app:
+                    app_name = current_app.data(Qt.UserRole)
+                    self._update_detail_view(app_name)
             
             # 총 시간 업데이트
             self.update_total_time()
             
         except Exception as e:
             print(f"그래프 업데이트 중 오류 발생: {e}")
-            import traceback
-            print(traceback.format_exc())
+            traceback.print_exc()
+
+    def _update_app_list(self):
+        """앱 목록을 업데이트합니다."""
+        try:
+            current_date = datetime.now().date().strftime('%Y-%m-%d')
+            if current_date not in self.app_usage['dates']:
+                return
+            
+            # 현재 선택된 앱 저장
+            current_app = self.app_list.currentItem()
+            current_app_name = current_app.data(Qt.UserRole) if current_app else None
+            
+            # 목록 업데이트 시작
+            self.app_list.blockSignals(True)
+            self.app_list.clear()
+            
+            # 앱 데이터 정렬 (사용 시간 기준)
+            app_data = []
+            for app_name, data in self.app_usage['dates'][current_date].items():
+                if app_name == APP_NAME:
+                    continue
+                total_time = sum(window_time for window_time in data.get('windows', {}).values())
+                app_data.append((app_name, total_time))
+            
+            app_data.sort(key=lambda x: x[1], reverse=True)
+            
+            # 앱 목록 추가
+            selected_item = None
+            for app_name, total_time in app_data:
+                item = QListWidgetItem()
+                item.setText(f"{app_name} ({self.format_time(total_time)})")
+                item.setData(Qt.UserRole, app_name)
+                self.app_list.addItem(item)
+                
+                # 이전에 선택된 앱과 같은 앱이면 저장
+                if app_name == current_app_name:
+                    selected_item = item
+            
+            # 이전 선택 복원
+            if selected_item:
+                self.app_list.setCurrentItem(selected_item)
+            
+            self.app_list.blockSignals(False)
+            
+        except Exception as e:
+            print(f"앱 목록 업데이트 중 오류 발생: {e}")
+            traceback.print_exc()
+
+    def _on_app_selected(self, current, previous):
+        """앱이 선택되었을 때 호출됩니다."""
+        if current:
+            app_name = current.data(Qt.UserRole)
+            self._update_detail_view(app_name)
+
+    def _update_detail_view(self, app_name):
+        """선택된 앱의 상세 정보를 업데이트합니다."""
+        try:
+            current_date = datetime.now().date().strftime('%Y-%m-%d')
+            if current_date not in self.app_usage['dates'] or app_name not in self.app_usage['dates'][current_date]:
+                return
+            
+            app_data = self.app_usage['dates'][current_date][app_name]
+            windows = app_data.get('windows', {})
+            start_times = app_data.get('start_times', [])
+            
+            # 테이블 업데이트 시작
+            self.detail_table.setRowCount(0)
+            
+            # 창별 정보 추가
+            for window_title, window_time in windows.items():
+                if isinstance(window_title, tuple):
+                    window_title = window_title[1] if len(window_title) > 1 else window_title[0]
+                
+                row = self.detail_table.rowCount()
+                self.detail_table.insertRow(row)
+                
+                # 창 제목
+                title_item = QTableWidgetItem(window_title)
+                self.detail_table.setItem(row, 0, title_item)
+                
+                # 시작 시간 (가장 최근 시간 사용)
+                start_time = start_times[-1] if start_times else ""
+                time_item = QTableWidgetItem(start_time)
+                self.detail_table.setItem(row, 1, time_item)
+                
+                # 사용 시간
+                duration_item = QTableWidgetItem(self.format_time(window_time))
+                self.detail_table.setItem(row, 2, duration_item)
+            
+        except Exception as e:
+            print(f"상세 정보 업데이트 중 오류 발생: {e}")
+            traceback.print_exc()
 
     def setup_style(self):
-        # 헤더와 아이템 폰트 크기 설정
-        header_font = QFont("Arial", 16, QFont.Bold)
-        item_font = QFont("Arial", 14)
-        
-        for i in range(4):  # 모든 열의 헤더에 폰트 적용
-            self.tree_widget.headerItem().setFont(i, header_font)
-        
-        self.tree_widget.setStyleSheet("""
-            QTreeWidget {
+        # 다크 테마 스타일
+        dark_style = """
+            QWidget {
                 background-color: #1E1E1E;
                 color: white;
+            }
+            QListWidget {
+                background-color: #2C2C2C;
                 border: none;
-                font-size: 14px;
+                padding: 5px;
             }
-            QTreeWidget::item {
-                padding: 8px;
+            QListWidget::item {
+                padding: 10px;
                 border-bottom: 1px solid #3C3C3C;
-                height: 35px;
             }
-            QTreeWidget::item:selected {
+            QListWidget::item:selected {
                 background-color: #404040;
+            }
+            QTableWidget {
+                background-color: #2C2C2C;
+                border: none;
+                gridline-color: #3C3C3C;
+            }
+            QTableWidget::item {
+                padding: 8px;
             }
             QHeaderView::section {
                 background-color: #2C2C2C;
                 color: white;
-                padding: 10px;
+                padding: 8px;
                 border: 1px solid #3C3C3C;
-                font-size: 16px;
             }
-            QHeaderView::section:hover {
-                background-color: #404040;
+            QLabel {
+                color: white;
             }
-        """)
-
-    def on_header_clicked(self, logical_index):
-        if logical_index == self.sort_column:
-            self.sort_order = Qt.AscendingOrder if self.sort_order == Qt.DescendingOrder else Qt.DescendingOrder
-        else:
-            self.sort_column = logical_index
-            self.sort_order = Qt.AscendingOrder if logical_index == 0 else Qt.DescendingOrder
-        
-        self.tree_widget.sortItems(self.sort_column, self.sort_order)
+        """
+        self.setStyleSheet(dark_style)

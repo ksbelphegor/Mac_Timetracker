@@ -8,14 +8,14 @@ import os
 import json
 import sys
 
-from core.config import *
-from core.data_manager import DataManager
-from core.app_tracker import AppTracker
-from core.timer_manager import TimerManager
-from ui.ui_controller import UIController
+from src.core.config import *
+from src.core.data_manager import DataManager
+from src.core.app_tracker import AppTracker
+from src.core.timer_manager import TimerManager
+from src.ui.ui_controller import UIController
 
-from ui.widgets.home_widget import HomeWidget
-from ui.widgets.timer_widget import TimerWidget
+from src.ui.widgets.home_widget import HomeWidget
+from src.ui.widgets.timer_widget import TimerWidget
 from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular
 import datetime
 import objc
@@ -56,7 +56,7 @@ class TimerKing(QMainWindow):
         
         # 비동기 초기화 시작
         self._start_async_initialization()
-        
+
     def closeEvent(self, event):
         """앱이 종료될 때 호출됩니다."""
         if not self._is_shutting_down:
@@ -64,7 +64,7 @@ class TimerKing(QMainWindow):
             self._save_all_data()
             self.ui_controller.cleanup()
         event.accept()
-    
+
     def _save_all_data(self):
         """모든 데이터를 저장하고 종료 준비를 합니다."""
         try:
@@ -79,7 +79,7 @@ class TimerKing(QMainWindow):
                 print(f"파일 크기: {os.path.getsize(APP_USAGE_FILE)} bytes")
             
             print("데이터 저장 완료")
-            
+                
         except Exception as e:
             print(f"앱 종료 중 오류 발생: {e}")
             import traceback
@@ -159,28 +159,7 @@ class TimerKing(QMainWindow):
         self.time_track_widget.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         
         # 스타일시트 설정
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #1E1E1E;
-            }
-            QWidget {
-                background-color: #1E1E1E;
-                color: #FFFFFF;
-            }
-            QPushButton {
-                background-color: #2C2C2C;
-                border: none;
-                padding: 8px 15px;
-                border-radius: 5px;
-                color: #FFFFFF;
-            }
-            QPushButton:hover {
-                background-color: #404040;
-            }
-            QPushButton:pressed {
-                background-color: #505050;
-            }
-        """)
+        self.setStyleSheet(COMMON_STYLE)
 
         # 메뉴바 설정
         self.menubar = QMenuBar(self)
@@ -224,7 +203,7 @@ class TimerKing(QMainWindow):
         ]
         
         # 현재 설정된 보관 기간 가져오기
-        from core.config import DATA_RETENTION_DAYS
+        from src.core.config import DATA_RETENTION_DAYS
         
         # 보관 기간 액션 그룹 생성
         retention_group = QActionGroup(self)

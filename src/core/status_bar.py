@@ -6,7 +6,7 @@ from AppKit import (NSStatusBar, NSVariableStatusItemLength, NSImage, NSMenuItem
                    NSTextAlignmentCenter, NSColor, NSBezierPath, NSFontWeightBold)
 from PyQt5.QtCore import QTimer
 
-from core.config import APP_NAME, BUNDLE_ID, STATUS_BAR_WIDTH, STATUS_BAR_HEIGHT, ICON_SIZE
+from src.core.config import APP_NAME, BUNDLE_ID, STATUS_BAR_WIDTH, STATUS_BAR_HEIGHT, ICON_SIZE
 
 class StatusBarController(NSObject):
     def init(self):
@@ -90,6 +90,7 @@ class StatusBarController(NSObject):
         """상태바 메뉴를 설정합니다."""
         self.menu = menu
 
+    @objc.python_method
     def _format_time(self, time_text):
         """시간 표시 형식을 개선합니다."""
         # HH:MM:SS 형식에서 시간이 0이면 MM:SS만 표시

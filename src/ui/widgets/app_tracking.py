@@ -6,14 +6,14 @@ from PyQt5.QtGui import QFont, QPainter, QColor, QPen
 import time
 import traceback
 from datetime import datetime, timedelta
-from core.data_manager import DataManager
+from src.core.data_manager import DataManager
 import subprocess
 from Foundation import NSWorkspace
 import os
-from core.config import APP_NAME, DATA_RETENTION_DAYS
+from src.core.config import APP_NAME, DATA_RETENTION_DAYS, COMMON_STYLE
 import json
 import logging
-from ui.widgets.time_graph_widget import TimeGraphWidget
+from src.ui.widgets.time_graph_widget import TimeGraphWidget
 
 class AppTrackingWidget(QWidget):
     def __init__(self, parent=None):
@@ -716,43 +716,8 @@ class AppTrackingWidget(QWidget):
             self._update_detail_view(app_name)
 
     def setup_style(self):
-        # 다크 테마 스타일
-        dark_style = """
-            QWidget {
-                background-color: #1E1E1E;
-                color: white;
-            }
-            QListWidget {
-                background-color: #2C2C2C;
-                border: none;
-                padding: 5px;
-            }
-            QListWidget::item {
-                padding: 10px;
-                border-bottom: 1px solid #3C3C3C;
-            }
-            QListWidget::item:selected {
-                background-color: #404040;
-            }
-            QTableWidget {
-                background-color: #2C2C2C;
-                border: none;
-                gridline-color: #3C3C3C;
-            }
-            QTableWidget::item {
-                padding: 8px;
-            }
-            QHeaderView::section {
-                background-color: #2C2C2C;
-                color: white;
-                padding: 8px;
-                border: 1px solid #3C3C3C;
-            }
-            QLabel {
-                color: white;
-            }
-        """
-        self.setStyleSheet(dark_style)
+        # 공통 스타일시트 사용
+        self.setStyleSheet(COMMON_STYLE)
 
     def cleanup_old_data(self, days_to_keep=None):
         """오래된 데이터를 정리합니다."""
@@ -1090,43 +1055,8 @@ class Home_app_tracking(AppTrackingWidget):
             logging.error(f"상세 정보 업데이트 중 오류 발생: {e}")
 
     def setup_style(self):
-        # 다크 테마 스타일
-        dark_style = """
-            QWidget {
-                background-color: #1E1E1E;
-                color: white;
-            }
-            QListWidget {
-                background-color: #2C2C2C;
-                border: none;
-                padding: 5px;
-            }
-            QListWidget::item {
-                padding: 10px;
-                border-bottom: 1px solid #3C3C3C;
-            }
-            QListWidget::item:selected {
-                background-color: #404040;
-            }
-            QTableWidget {
-                background-color: #2C2C2C;
-                border: none;
-                gridline-color: #3C3C3C;
-            }
-            QTableWidget::item {
-                padding: 8px;
-            }
-            QHeaderView::section {
-                background-color: #2C2C2C;
-                color: white;
-                padding: 8px;
-                border: 1px solid #3C3C3C;
-            }
-            QLabel {
-                color: white;
-            }
-        """
-        self.setStyleSheet(dark_style)
+        # 공통 스타일시트 사용
+        self.setStyleSheet(COMMON_STYLE)
 
     def _get_window_display_title(self, window_title):
         """창 제목을 표시용으로 변환합니다."""

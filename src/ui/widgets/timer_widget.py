@@ -2,7 +2,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                          QLabel, QFrame, QComboBox)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
-from core.data_manager import DataManager
+from src.core.data_manager import DataManager
+from src.core.config import COMMON_STYLE
 
 class TimerWidget(QWidget):
     def __init__(self, parent=None):
@@ -13,35 +14,7 @@ class TimerWidget(QWidget):
         
         # 앱 선택 콤보박스 추가
         self.app_combo = QComboBox()
-        self.app_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #2C2C2C;
-                color: white;
-                border: none;
-                padding: 5px;
-                border-radius: 3px;
-                min-width: 200px;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 5px solid #2C2C2C;
-                border-right: 5px solid #2C2C2C;
-                border-top: 5px solid white;
-                width: 0;
-                height: 0;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2C2C2C;
-                color: white;
-                selection-background-color: #404040;
-                selection-color: white;
-                border: none;
-            }
-        """)
+        self.app_combo.setMinimumWidth(200)
         
         # 시간 프레임
         self.time_frame = QFrame()
@@ -90,6 +63,9 @@ class TimerWidget(QWidget):
         layout.addWidget(self.time_frame)
         layout.addWidget(button_container)
         self.setLayout(layout)
+        
+        # 스타일시트 설정
+        self.setStyleSheet(COMMON_STYLE)
         
         # 창 크기 조정
         self.setFixedSize(250, 150)

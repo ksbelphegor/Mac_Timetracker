@@ -2,7 +2,7 @@ import time as time_module
 import datetime
 import traceback
 from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular
-from core.config import APP_NAME, BUNDLE_ID
+from src.core.config import APP_NAME, BUNDLE_ID
 import os
 
 class AppTracker:

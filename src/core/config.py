@@ -28,6 +28,70 @@ ICON_SIZE = 20
 # 데이터 보관 설정
 DATA_RETENTION_DAYS = 30  # 기본값: 30일간 데이터 보관
 
+# 공통 스타일시트
+COMMON_STYLE = """
+    QWidget {
+        background-color: #1E1E1E;
+        color: white;
+    }
+    QPushButton {
+        background-color: #2C2C2C;
+        border: none;
+        padding: 8px 15px;
+        border-radius: 5px;
+        color: #FFFFFF;
+    }
+    QPushButton:hover {
+        background-color: #404040;
+    }
+    QPushButton:pressed {
+        background-color: #505050;
+    }
+    QListWidget {
+        background-color: #2C2C2C;
+        border: none;
+        padding: 5px;
+    }
+    QListWidget::item {
+        padding: 10px;
+        border-bottom: 1px solid #3C3C3C;
+    }
+    QListWidget::item:selected {
+        background-color: #404040;
+    }
+    QTableWidget {
+        background-color: #2C2C2C;
+        border: none;
+        gridline-color: #3C3C3C;
+    }
+    QTableWidget::item {
+        padding: 8px;
+    }
+    QHeaderView::section {
+        background-color: #2C2C2C;
+        color: white;
+        padding: 8px;
+        border: 1px solid #3C3C3C;
+    }
+    QComboBox {
+        background-color: #2C2C2C;
+        color: white;
+        border: none;
+        padding: 5px;
+        border-radius: 3px;
+    }
+    QComboBox::drop-down {
+        border: none;
+    }
+    QComboBox QAbstractItemView {
+        background-color: #2C2C2C;
+        color: white;
+        selection-background-color: #404040;
+        selection-color: white;
+        border: none;
+    }
+"""
+
 # 로깅 설정
 def setup_logging():
     """로깅 시스템을 설정합니다."""

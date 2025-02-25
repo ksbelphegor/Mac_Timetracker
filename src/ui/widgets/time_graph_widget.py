@@ -3,8 +3,8 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont, QPainter, QColor, QPen
 import time
 from datetime import datetime
-from core.config import APP_NAME
-from core.data_manager import DataManager
+from src.core.config import APP_NAME
+from src.core.data_manager import DataManager
 
 class TimeGraphWidget(QWidget):
     def __init__(self, parent=None):

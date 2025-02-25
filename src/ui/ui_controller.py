@@ -1,8 +1,8 @@
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QMenu
-from core.status_bar import StatusBarController
+from src.core.status_bar import StatusBarController
 import objc
-from AppKit import NSWorkspace, NSMenu, NSMenuItem
+from AppKit import NSWorkspace, NSMenu, NSMenuItem, NSStatusBar
 import logging
 import os
 import re
@@ -222,6 +222,14 @@ class UIController:
             self.app_update_timer.stop()
         if hasattr(self, 'autosave_timer'):
             self.autosave_timer.stop()
+        
+        # 상태바 컨트롤러 정리
+        if hasattr(self, 'status_bar_controller') and self.status_bar_controller:
+            # 상태바 아이템 제거
+            try:
+                NSStatusBar.systemStatusBar().removeStatusItem_(self.status_bar_controller.statusItem)
+            except Exception as e:
+                print(f"상태바 제거 중 오류 발생: {e}")
     
     def update_status_bar(self):
         """상태 표시줄을 업데이트합니다."""
@@ -230,7 +238,7 @@ class UIController:
     
     def set_data_retention_period(self, days):
         """데이터 보관 기간을 설정합니다."""
-        from core.config import DATA_RETENTION_DAYS
+        from src.core.config import DATA_RETENTION_DAYS
         
         # config.py 파일 경로
         config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'core', 'config.py')

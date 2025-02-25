@@ -1,7 +1,7 @@
 import json
 import os
 import traceback
-from core.config import DATA_DIR, APP_USAGE_FILE, TIMER_DATA_FILE
+from src.core.config import DATA_DIR, APP_USAGE_FILE, TIMER_DATA_FILE
 import threading
 import time as time_module
 from datetime import datetime

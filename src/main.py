@@ -1,62 +1,49 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 import os
 import sys
-import PyQt5
 import traceback
 import logging
 from pathlib import Path
 
-# src 디렉토리를 Python 경로에 추가
+# 현재 디렉토리의 상위 디렉토리를 Python 경로에 추가
 current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
+parent_dir = os.path.dirname(current_dir)  # Mac_Timetracker 디렉토리
+sys.path.append(parent_dir)
 
-# 플러그인 경로 설정
+# PyQt5 가져오기 - 가상 환경에서만 실행되도록 확인
+try:
+    import PyQt5
+    from PyQt5.QtWidgets import QApplication, QMessageBox
+    from PyQt5.QtCore import Qt
+except ImportError:
+    print("PyQt5를 찾을 수 없습니다. 가상 환경을 활성화하고 실행했는지 확인하세요.")
+    print("다음 명령어로 실행하세요:")
+    print("  source venv/bin/activate")
+    print("  python src/main.py")
+    sys.exit(1)
+
+# 플러그인 경로 설정 (최소화 버전)
 if sys.platform == "darwin":  # macOS
-    # 여러 가능한 경로 시도 (일반적인 경로만 포함)
-    qt_plugin_paths = [
-        os.path.join(os.path.dirname(PyQt5.__file__), "Qt", "plugins"),
-        os.path.join(os.path.dirname(PyQt5.__file__), "Qt5", "plugins"),
-        os.path.join(os.path.dirname(PyQt5.__file__), "plugins")
-    ]
-    
-    # 사용자 홈 디렉토리 기반 경로 추가 (더 범용적)
-    home = str(Path.home())
-    qt_plugin_paths.extend([
-        os.path.join(home, ".conda/lib/python3.9/site-packages/PyQt5/Qt/plugins"),
-        os.path.join(home, ".conda/lib/python3.9/site-packages/PyQt5/Qt5/plugins"),
-        os.path.join(home, "miniconda3/lib/python3.9/site-packages/PyQt5/Qt5/plugins"),
-        os.path.join(home, "anaconda3/lib/python3.9/site-packages/PyQt5/Qt5/plugins")
-    ])
-    
-    # 현재 PyQt5 설치 경로 기반 추가 탐색
-    pyqt_dir = os.path.dirname(PyQt5.__file__)
-    for root, dirs, files in os.walk(pyqt_dir):
-        if "platforms" in dirs and os.path.exists(os.path.join(root, "platforms", "libqcocoa.dylib")):
-            qt_plugin_paths.append(root)
-    
-    # 플러그인 경로 중 실제로 존재하는 경로 찾기
-    for path in qt_plugin_paths:
-        platform_path = os.path.join(path, "platforms")
-        if os.path.exists(platform_path) and os.path.exists(os.path.join(platform_path, "libqcocoa.dylib")):
-            os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = platform_path
-            print(f"플러그인 경로 설정: {platform_path}")
-            print("'cocoa' 플러그인 찾음!")
-            break
-    else:
-        print("경고: 유효한 Qt 플러그인 경로를 찾을 수 없습니다.")
-        # 마지막 시도: PyQt5 경로에서 'platforms' 디렉토리 검색
-        for root, dirs, files in os.walk(os.path.dirname(PyQt5.__file__)):
-            if "platforms" in dirs:
-                platform_path = os.path.join(root, "platforms")
-                if os.path.exists(os.path.join(platform_path, "libqcocoa.dylib")):
-                    os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = platform_path
-                    print(f"플러그인 경로 설정: {platform_path}")
-                    print("'cocoa' 플러그인 찾음!")
-                    break
+    try:
+        pyqt_dir = os.path.dirname(PyQt5.__file__)
+        platforms_dir = os.path.join(pyqt_dir, "Qt", "plugins", "platforms")
+        
+        # Qt5 디렉토리 체크
+        if not os.path.exists(platforms_dir):
+            platforms_dir = os.path.join(pyqt_dir, "Qt5", "plugins", "platforms")
+        
+        # 플랫폼 플러그인 확인
+        if os.path.exists(platforms_dir) and os.path.exists(os.path.join(platforms_dir, "libqcocoa.dylib")):
+            os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = platforms_dir
+            print(f"플러그인 경로 설정: {platforms_dir}")
+    except Exception as e:
+        print(f"플러그인 경로 설정 중 오류 발생: {e}")
 
-from PyQt5.QtWidgets import QApplication
-from ui.timer_king import TimerKing
-from core.data_manager import DataManager
-from core.config import APP_NAME, BUNDLE_ID, setup_logging
+from src.ui.timer_king import TimerKing
+from src.core.data_manager import DataManager
+from src.core.config import APP_NAME, BUNDLE_ID, setup_logging
 import objc
 from Foundation import NSBundle
 
@@ -76,12 +63,6 @@ def main():
         app.setQuitOnLastWindowClosed(False)
         app.setApplicationName(APP_NAME)
         
-        # 스타일 설정
-        style_file = os.path.join(os.path.dirname(__file__), 'ui', 'styles.qss')
-        if os.path.exists(style_file):
-            with open(style_file, 'r') as f:
-                app.setStyleSheet(f.read())
-        
         # macOS 앱 설정
         bundle = NSBundle.mainBundle()
         info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
@@ -94,11 +75,18 @@ def main():
         main_window = TimerKing()
         main_window.show()
         
+        # 앱 종료 시 정리 작업 추가
+        app.aboutToQuit.connect(lambda: main_window._save_all_data())
+        
         sys.exit(app.exec_())
         
     except Exception as e:
         logger.error(f"치명적 오류 발생: {e}")
         logger.error(traceback.format_exc())
+        
+        # GUI 오류 메시지 표시 (앱 초기화가 완료된 경우)
+        if 'app' in locals():
+            QMessageBox.critical(None, "오류", f"앱 실행 중 오류가 발생했습니다:\n{str(e)}")
 
 if __name__ == '__main__':
     main()

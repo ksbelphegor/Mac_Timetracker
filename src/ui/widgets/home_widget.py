@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QHBoxLayout, QApplication
-from ui.widgets.app_tracking import Home_app_tracking
+from src.ui.widgets.app_tracking import Home_app_tracking
 import os
 
 class HomeWidget(QWidget):

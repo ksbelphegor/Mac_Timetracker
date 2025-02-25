@@ -1,0 +1,177 @@
+import time as time_module
+import datetime
+import traceback
+from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular
+from core.config import APP_NAME, BUNDLE_ID
+import os
+
+class AppTracker:
+    """앱 추적 로직을 처리하는 클래스"""
+    
+    def __init__(self, data_manager):
+        """AppTracker 초기화"""
+        self.data_manager = data_manager
+        self.our_pid = os.getpid()
+        self.our_bundle_id = BUNDLE_ID
+        self.our_app_name = APP_NAME
+        
+        # 기본 데이터 초기화
+        self.current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
+        self.app_usage = {'dates': {self.current_date: {}}}
+        
+        # 캐시 및 상태 관리
+        self._window_title_cache = {}
+        self._app_list_cache = set()
+        self._last_app_update = 0
+        self._last_window_check = 0
+        self._window_check_interval = 1.0
+        self._app_cache_lifetime = 10.0
+        self._cache_cleanup_counter = 0
+        
+        # 실행 중인 앱 목록
+        self.running_apps = set()
+    
+    def get_active_window_title(self):
+        """현재 활성 창의 제목을 가져옵니다."""
+        try:
+            # 메인 창과 타이머 창 확인 (UI로부터 전달받아야 함)
+            # 이 부분은 외부에서 전달받아 처리하도록 수정
+            
+            workspace = NSWorkspace.sharedWorkspace()
+            active_app = workspace.activeApplication()
+            if not active_app:
+                return None, None
+            
+            app_name = active_app['NSApplicationName']
+            
+            # 우리 앱인 경우 (이 부분은 UI에서 확인해야 함)
+            if active_app['NSApplicationProcessIdentifier'] == self.our_pid:
+                return app_name, "App"
+            
+            # 시스템 앱은 제외
+            skip_apps = {'Finder', 'SystemUIServer', 'loginwindow', 'Dock', 'Control Center', 'Notification Center'}
+            if app_name in skip_apps:
+                return app_name, app_name
+            
+            # 캐시 확인
+            cache_key = f"{app_name}_{active_app['NSApplicationProcessIdentifier']}"
+            current_time = time_module.time()
+            
+            if (cache_key in self._window_title_cache and 
+                current_time - self._window_title_cache[cache_key]['time'] < 10.0):
+                return app_name, self._window_title_cache[cache_key]['title']
+            
+            # 캐시 업데이트
+            window_title = app_name
+            self._window_title_cache[cache_key] = {
+                'title': window_title,
+                'time': current_time
+            }
+            
+            # 주기적으로 캐시 정리 (100회마다)
+            self._cache_cleanup_counter += 1
+            if self._cache_cleanup_counter >= 100:
+                self._cleanup_cache()
+                self._cache_cleanup_counter = 0
+            
+            return app_name, window_title
+            
+        except Exception as e:
+            print(f"활성 창 정보 가져오기 실패: {e}")
+            return None, None
+    
+    def _cleanup_cache(self):
+        """오래된 캐시 항목을 정리합니다."""
+        try:
+            current_time = time_module.time()
+            expired_keys = []
+            
+            for key, data in self._window_title_cache.items():
+                if current_time - data['time'] > 300:  # 5분 이상 지난 항목 제거
+                    expired_keys.append(key)
+            
+            for key in expired_keys:
+                del self._window_title_cache[key]
+                
+            print(f"{len(expired_keys)}개의 캐시 항목 정리됨")
+            
+        except Exception as e:
+            print(f"캐시 정리 중 오류 발생: {e}")
+    
+    def update_app_list(self):
+        """실행 중인 앱 목록을 업데이트합니다."""
+        current_time = time_module.time()
+        
+        # 캐시가 유효한 경우 캐시된 앱 리스트 사용
+        if (current_time - self._last_app_update < self._app_cache_lifetime and 
+            self._app_list_cache):
+            return self._app_list_cache
+        
+        # 앱 리스트 업데이트
+        new_apps = set()
+        for app in NSWorkspace.sharedWorkspace().runningApplications():
+            if app.activationPolicy() == NSApplicationActivationPolicyRegular:
+                app_name = app.localizedName()
+                if app_name:
+                    new_apps.add(app_name)
+        
+        # 변경사항이 있을 때만 업데이트
+        if new_apps != self._app_list_cache:
+            self.running_apps = new_apps
+            self._app_list_cache = new_apps.copy()
+            self._last_app_update = current_time
+        
+        return self._app_list_cache
+    
+    def update_usage_stats(self, timer_data):
+        """현재 실행 중인 앱의 시간을 업데이트합니다."""
+        try:
+            if not timer_data.get('is_active', False) or not timer_data.get('app_name'):
+                return
+                
+            current_time = time_module.time()
+            current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
+            
+            # 날짜가 변경되었는지 확인
+            if current_date != self.current_date:
+                # 새로운 날짜의 데이터 초기화
+                if current_date not in self.app_usage['dates']:
+                    self.app_usage['dates'][current_date] = {}
+                
+                # 현재 날짜 업데이트
+                self.current_date = current_date
+            
+            # 현재 활성화된 앱의 시간 업데이트
+            if timer_data['is_active'] and timer_data['app_name']:
+                app_name = timer_data['app_name']
+                
+                # 현재 날짜의 앱 데이터 초기화
+                if app_name not in self.app_usage['dates'][current_date]:
+                    self.app_usage['dates'][current_date][app_name] = {
+                        'total_time': 0,
+                        'windows': {},
+                        'is_active': True,
+                        'last_update': current_time
+                    }
+                
+                app_data = self.app_usage['dates'][current_date][app_name]
+                if timer_data['current_window']:
+                    window_key = timer_data['current_window']
+                    if window_key not in app_data['windows']:
+                        app_data['windows'][window_key] = 0
+                
+                # 시간 계산 및 업데이트
+                elapsed = current_time - timer_data.get('start_time', current_time)
+                app_data['total_time'] += elapsed
+                if timer_data['current_window']:
+                    app_data['windows'][timer_data['current_window']] += elapsed
+                
+                app_data['last_update'] = current_time
+            
+        except Exception as e:
+            print(f"앱 사용 통계 업데이트 중 오류 발생: {e}")
+            traceback.print_exc()
+    
+    def save_app_usage(self):
+        """앱 사용 통계를 저장합니다."""
+        self.data_manager.save_app_usage(self.app_usage) 

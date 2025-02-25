@@ -47,21 +47,25 @@ python src/main.py
 ## 프로젝트 구조
 
 ```
-timer/
+Mac_Timetracker/
 ├── src/
-│   ├── core/          # 핵심 기능
-│   │   ├── config.py
-│   │   ├── data_manager.py
-│   │   └── status_bar.py
-│   ├── ui/            # 사용자 인터페이스
-│   │   ├── widgets/
-│   │   │   ├── app_tracking.py
-│   │   │   ├── home_widget.py
-│   │   │   └── timer_widget.py
-│   │   └── timer_setting.py
-│   └── main.py
-├── requirements.txt
-└── README.md
+│   ├── core/                # 핵심 기능
+│   │   ├── app_tracker.py   # 앱 추적 로직
+│   │   ├── config.py        # 설정 관리
+│   │   ├── data_manager.py  # 데이터 관리
+│   │   ├── status_bar.py    # 상태 표시줄
+│   │   └── timer_manager.py # 타이머 관리
+│   ├── ui/                  # 사용자 인터페이스
+│   │   ├── widgets/         # UI 위젯 컴포넌트
+│   │   │   ├── app_tracking.py    # 앱 추적 위젯
+│   │   │   ├── home_widget.py     # 홈 화면 위젯
+│   │   │   ├── time_graph_widget.py # 시간 그래프 위젯
+│   │   │   └── timer_widget.py    # 타이머 위젯
+│   │   ├── timer_king.py    # 메인 UI 컨트롤러
+│   │   └── ui_controller.py # UI 컨트롤러
+│   └── main.py              # 프로그램 진입점
+├── requirements.txt         # 의존성 패키지 목록
+└── README.md                # 프로젝트 설명서
 ```
 
 ## 기여 방법

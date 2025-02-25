@@ -1,10 +1,12 @@
 import time as time_module
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                            QPushButton, QLabel, QApplication)
+                            QPushButton, QLabel, QApplication, QMenu, QAction, QMessageBox,
+                            QActionGroup, QMenuBar)
 from PyQt5.QtCore import Qt, QTimer, QSettings
 from PyQt5.QtGui import QFont
 import os
 import json
+import sys
 
 from core.config import *
 from core.data_manager import DataManager
@@ -180,6 +182,14 @@ class TimerKing(QMainWindow):
             }
         """)
 
+        # 메뉴바 설정
+        self.menubar = QMenuBar(self)
+        self.setMenuBar(self.menubar)
+        
+        # 설정 메뉴 추가
+        settings_menu = self._create_settings_menu()
+        self.menubar.addMenu(settings_menu)
+
     def __del__(self):
         """소멸자에서 스레드 풀 정리"""
         if hasattr(self, 'thread_pool'):
@@ -187,3 +197,117 @@ class TimerKing(QMainWindow):
             
         # 모든 데이터 저장
         self._save_all_data()
+
+    def _create_settings_menu(self):
+        """설정 메뉴를 생성합니다."""
+        settings_menu = QMenu("설정", self)
+        
+        # 자동 시작 설정
+        autostart_action = QAction("시스템 시작 시 자동 실행", self)
+        autostart_action.setCheckable(True)
+        autostart_action.setChecked(self._is_autostart_enabled())
+        autostart_action.triggered.connect(self._toggle_autostart)
+        settings_menu.addAction(autostart_action)
+        
+        # 데이터 보관 기간 설정
+        data_retention_menu = QMenu("데이터 보관 기간", self)
+        
+        # 보관 기간 옵션들
+        retention_options = [
+            ("7일", 7),
+            ("14일", 14),
+            ("30일", 30),
+            ("60일", 60),
+            ("90일", 90),
+            ("180일", 180),
+            ("365일", 365)
+        ]
+        
+        # 현재 설정된 보관 기간 가져오기
+        from core.config import DATA_RETENTION_DAYS
+        
+        # 보관 기간 액션 그룹 생성
+        retention_group = QActionGroup(self)
+        retention_group.setExclusive(True)
+        
+        for label, days in retention_options:
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(days == DATA_RETENTION_DAYS)
+            action.setData(days)
+            retention_group.addAction(action)
+            data_retention_menu.addAction(action)
+        
+        # 보관 기간 변경 시 호출될 함수 연결
+        retention_group.triggered.connect(self._set_data_retention_period)
+        
+        settings_menu.addMenu(data_retention_menu)
+        
+        return settings_menu
+
+    def _set_data_retention_period(self, action):
+        """데이터 보관 기간을 설정합니다."""
+        days = action.data()
+        if self.ui_controller.set_data_retention_period(days):
+            QMessageBox.information(self, "설정 변경", f"데이터 보관 기간이 {days}일로 변경되었습니다.")
+        else:
+            QMessageBox.warning(self, "설정 변경 실패", "데이터 보관 기간 변경 중 오류가 발생했습니다.")
+
+    def _is_autostart_enabled(self):
+        """시스템 시작 시 자동 실행 여부를 확인합니다."""
+        settings = QSettings("ksbelphegor", "Mac_Timetracker")
+        return settings.value("autostart", False, type=bool)
+    
+    def _toggle_autostart(self, enabled):
+        """시스템 시작 시 자동 실행 설정을 토글합니다."""
+        settings = QSettings("ksbelphegor", "Mac_Timetracker")
+        settings.setValue("autostart", enabled)
+        
+        # macOS 자동 시작 설정
+        import os
+        from pathlib import Path
+        
+        # 앱 실행 파일 경로
+        app_path = os.path.abspath(sys.argv[0])
+        
+        # LaunchAgents 디렉토리 경로
+        launch_agents_dir = os.path.expanduser("~/Library/LaunchAgents")
+        os.makedirs(launch_agents_dir, exist_ok=True)
+        
+        # plist 파일 경로
+        plist_path = os.path.join(launch_agents_dir, "com.ksbelphegor.mactimetracker.plist")
+        
+        if enabled:
+            # plist 파일 생성
+            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ksbelphegor.mactimetracker</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>python3</string>
+        <string>{app_path}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+"""
+            with open(plist_path, "w") as f:
+                f.write(plist_content)
+                
+            # launchctl에 등록
+            os.system(f"launchctl load {plist_path}")
+            
+            QMessageBox.information(self, "자동 시작 설정", "시스템 시작 시 자동으로 실행되도록 설정되었습니다.")
+        else:
+            # launchctl에서 제거
+            if os.path.exists(plist_path):
+                os.system(f"launchctl unload {plist_path}")
+                os.remove(plist_path)
+                
+            QMessageBox.information(self, "자동 시작 설정", "시스템 시작 시 자동 실행 설정이 해제되었습니다.")

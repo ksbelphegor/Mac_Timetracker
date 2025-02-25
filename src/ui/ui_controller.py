@@ -3,6 +3,9 @@ from PyQt5.QtWidgets import QApplication, QMenu
 from core.status_bar import StatusBarController
 import objc
 from AppKit import NSWorkspace, NSMenu, NSMenuItem
+import logging
+import os
+import re
 
 class UIController:
     """UI 관련 로직을 처리하는 클래스"""
@@ -218,4 +221,41 @@ class UIController:
         if hasattr(self, 'app_update_timer'):
             self.app_update_timer.stop()
         if hasattr(self, 'autosave_timer'):
-            self.autosave_timer.stop() 
+            self.autosave_timer.stop()
+    
+    def update_status_bar(self):
+        """상태 표시줄을 업데이트합니다."""
+        if self.status_bar:
+            self.status_bar.update_display()
+    
+    def set_data_retention_period(self, days):
+        """데이터 보관 기간을 설정합니다."""
+        from core.config import DATA_RETENTION_DAYS
+        
+        # config.py 파일 경로
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'core', 'config.py')
+        
+        try:
+            # config.py 파일 읽기
+            with open(config_path, 'r') as f:
+                config_content = f.read()
+            
+            # DATA_RETENTION_DAYS 값 업데이트
+            updated_content = re.sub(
+                r'DATA_RETENTION_DAYS\s*=\s*\d+',
+                f'DATA_RETENTION_DAYS = {days}',
+                config_content
+            )
+            
+            # 파일 쓰기
+            with open(config_path, 'w') as f:
+                f.write(updated_content)
+            
+            # 앱 추적 위젯에서 오래된 데이터 정리
+            if hasattr(self, 'app_tracking_widget') and self.app_tracking_widget:
+                self.app_tracking_widget.cleanup_old_data(days)
+                
+            return True
+        except Exception as e:
+            logging.error(f"데이터 보관 기간 설정 중 오류 발생: {e}")
+            return False 

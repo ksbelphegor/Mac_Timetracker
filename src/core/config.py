@@ -4,12 +4,13 @@ from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 # 앱 정보
-APP_NAME = "Mac Time Tracker"
-BUNDLE_ID = "com.ksbelphegor.timetracker"
+APP_NAME = "Mac 타임좌"
+BUNDLE_ID = "com.ksbelphegor.mactimetracker"
+APP_VERSION = "1.0.0"
 
 # 디렉토리 설정
 HOME_DIR = str(Path.home())
-DATA_DIR = os.path.join(HOME_DIR, '.mac_timetracker')
+DATA_DIR = os.path.expanduser("~/.mactimetracker")
 APP_USAGE_FILE = os.path.join(DATA_DIR, 'app_usage.json')
 TIMER_DATA_FILE = os.path.join(DATA_DIR, 'timer_data.json')
 LOG_FILE = os.path.join(DATA_DIR, 'app.log')
@@ -23,6 +24,9 @@ TIME_UPDATE_INTERVAL = 1000  # 밀리초
 STATUS_BAR_WIDTH = 120
 STATUS_BAR_HEIGHT = 22
 ICON_SIZE = 20
+
+# 데이터 보관 설정
+DATA_RETENTION_DAYS = 30  # 기본값: 30일간 데이터 보관
 
 # 로깅 설정
 def setup_logging():

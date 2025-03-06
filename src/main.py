@@ -37,9 +37,9 @@ if sys.platform == "darwin":  # macOS
         # 플랫폼 플러그인 확인
         if os.path.exists(platforms_dir) and os.path.exists(os.path.join(platforms_dir, "libqcocoa.dylib")):
             os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = platforms_dir
-            print(f"플러그인 경로 설정: {platforms_dir}")
+            logging.debug(f"플러그인 경로 설정: {platforms_dir}")
     except Exception as e:
-        print(f"플러그인 경로 설정 중 오류 발생: {e}")
+        logging.error(f"플러그인 경로 설정 중 오류 발생: {e}")
 
 from src.ui.timer_king import TimerKing
 from src.core.data_manager import DataManager

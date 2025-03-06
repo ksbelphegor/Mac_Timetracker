@@ -1,15 +1,43 @@
 import time as time_module
 import datetime
 import traceback
+import logging
 from AppKit import NSWorkspace, NSApplicationActivationPolicyRegular
-from src.core.config import APP_NAME, BUNDLE_ID
+from src.core.config import APP_NAME, BUNDLE_ID, CONFIG
 import os
 
 class AppTracker:
-    """앱 추적 로직을 처리하는 클래스"""
+    """
+    앱 추적 로직을 처리하는 클래스
+    
+    이 클래스는 macOS에서 실행 중인 앱들의 사용 시간을 추적하고 관리합니다.
+    NSWorkspace API를 사용하여 현재 활성화된 앱 정보를 가져오고,
+    각 앱의 사용 시간을 기록하며, 창(윈도우) 단위로 세부 사용 시간을 추적합니다.
+    
+    Attributes:
+        data_manager: 데이터 저장 및 로드를 담당하는 DataManager 인스턴스
+        our_pid: 현재 프로세스의 PID
+        our_bundle_id: 현재 앱의 번들 ID
+        our_app_name: 현재 앱의 이름
+        current_date: 현재 날짜 (YYYY-MM-DD 형식)
+        app_usage: 앱 사용 데이터를 저장하는 딕셔너리
+        _window_title_cache: 창 제목 캐시
+        _app_list_cache: 실행 중인 앱 목록 캐시
+        _last_app_update: 마지막 앱 목록 업데이트 시간
+        _last_window_check: 마지막 창 확인 시간
+        _window_check_interval: 창 확인 간격 (초)
+        _app_cache_lifetime: 앱 캐시 수명 (초)
+        _cache_cleanup_counter: 캐시 정리 카운터
+        running_apps: 현재 실행 중인 앱 목록
+    """
     
     def __init__(self, data_manager):
-        """AppTracker 초기화"""
+        """
+        AppTracker 초기화
+        
+        Args:
+            data_manager: 데이터 저장 및 로드를 담당하는 DataManager 인스턴스
+        """
         self.data_manager = data_manager
         self.our_pid = os.getpid()
         self.our_bundle_id = BUNDLE_ID
@@ -25,18 +53,26 @@ class AppTracker:
         self._last_app_update = 0
         self._last_window_check = 0
         self._window_check_interval = 1.0
-        self._app_cache_lifetime = 10.0
+        self._app_cache_lifetime = CONFIG["cache"]["app_lifetime"]
         self._cache_cleanup_counter = 0
         
         # 실행 중인 앱 목록
         self.running_apps = set()
+        
+        logging.info("AppTracker 초기화 완료")
     
     def get_active_window_title(self):
-        """현재 활성 창의 제목을 가져옵니다."""
+        """
+        현재 활성 창의 제목을 가져옵니다.
+        
+        NSWorkspace API를 사용하여 현재 활성화된 앱 정보를 가져오고,
+        해당 앱의 이름과 창 제목을 반환합니다.
+        
+        Returns:
+            tuple: (앱 이름, 창 제목) 형태의 튜플. 정보를 가져올 수 없는 경우 (None, None) 반환
+        """
         try:
-            # 메인 창과 타이머 창 확인 (UI로부터 전달받아야 함)
-            # 이 부분은 외부에서 전달받아 처리하도록 수정
-            
+            # NSWorkspace를 사용하여 현재 활성 앱 정보를 가져옵니다
             workspace = NSWorkspace.sharedWorkspace()
             active_app = workspace.activeApplication()
             if not active_app:
@@ -44,7 +80,7 @@ class AppTracker:
             
             app_name = active_app['NSApplicationName']
             
-            # 우리 앱인 경우 (이 부분은 UI에서 확인해야 함)
+            # 현재 앱이 우리 앱인 경우 처리
             if active_app['NSApplicationProcessIdentifier'] == self.our_pid:
                 return app_name, "App"
             

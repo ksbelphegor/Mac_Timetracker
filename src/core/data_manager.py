@@ -1,7 +1,8 @@
 import json
 import os
 import traceback
-from src.core.config import DATA_DIR, APP_USAGE_FILE, TIMER_DATA_FILE
+import logging
+from src.core.config import DATA_DIR, APP_USAGE_FILE, TIMER_DATA_FILE, CONFIG
 import threading
 import time as time_module
 from datetime import datetime
@@ -11,8 +12,10 @@ class DataManager:
     _lock = threading.Lock()
     _data_cache = {}
     _last_save = {}
-    _save_interval = 60  # 60초로 다시 변경
-    _max_cache_size = 1024 * 1024  # 1MB 캐시 크기 제한
+    _save_interval = CONFIG["data_management"]["save_interval"]
+    _max_cache_size = CONFIG["cache"]["max_size"]
+    _cache_cleanup_interval = CONFIG["cache"]["cleanup_interval"]
+    _last_cache_cleanup = 0
     
     @classmethod
     def get_instance(cls):
@@ -37,17 +40,59 @@ class DataManager:
             'timer_data': False
         }
         self._cache_size = 0
+        self._last_cache_cleanup = time_module.time()
     
     def _update_cache_size(self, data):
         """캐시 크기를 업데이트하고 제한을 확인합니다."""
         try:
             data_size = len(json.dumps(data))
             if data_size > self._max_cache_size:
+                logging.warning(f"데이터 크기({data_size}바이트)가 캐시 제한({self._max_cache_size}바이트)을 초과했습니다.")
                 return False
             self._cache_size = data_size
+            
+            # 주기적으로 캐시 정리 수행
+            current_time = time_module.time()
+            if current_time - self._last_cache_cleanup > self._cache_cleanup_interval:
+                self._cleanup_cache()
+                self._last_cache_cleanup = current_time
+                
             return True
         except Exception as e:
+            logging.error(f"캐시 크기 업데이트 중 오류 발생: {e}")
             return False
+            
+    def _cleanup_cache(self):
+        """오래된 캐시 데이터를 정리합니다."""
+        try:
+            logging.info("캐시 정리 시작")
+            # 현재 날짜보다 30일 이상 지난 데이터 정리
+            if self._data_cache['app_usage'] is not None:
+                current_date = datetime.now().date()
+                dates_to_remove = []
+                
+                for date_str in self._data_cache['app_usage'].get('dates', {}):
+                    try:
+                        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+                        days_diff = (current_date - date_obj).days
+                        
+                        if days_diff > 30:  # 30일 이상 지난 데이터
+                            dates_to_remove.append(date_str)
+                    except ValueError:
+                        # 잘못된 날짜 형식은 무시
+                        continue
+                
+                # 오래된 데이터 제거
+                for date_str in dates_to_remove:
+                    del self._data_cache['app_usage']['dates'][date_str]
+                    
+                if dates_to_remove:
+                    logging.info(f"{len(dates_to_remove)}개의 오래된 날짜 데이터를 캐시에서 제거했습니다.")
+                    self._dirty['app_usage'] = True
+            
+            logging.info("캐시 정리 완료")
+        except Exception as e:
+            logging.error(f"캐시 정리 중 오류 발생: {e}")
 
     def ensure_data_directory(self):
         """데이터 디렉토리가 없으면 생성합니다."""
@@ -120,8 +165,16 @@ class DataManager:
                         self._last_save['app_usage'] = current_time
                         self._dirty['app_usage'] = False
             except Exception as e:
-                print(f"앱 사용 데이터 저장 중 오류 발생: {e}")
-                traceback.print_exc()
+                logging.error(f"앱 사용 데이터 저장 중 오류 발생: {e}")
+                logging.error(traceback.format_exc())
+                # 오류 복구: 백업 파일 생성 시도
+                try:
+                    backup_file = f"{APP_USAGE_FILE}.backup"
+                    with open(backup_file, 'w', encoding='utf-8') as f:
+                        json.dump(processed_data, f, ensure_ascii=False)
+                    logging.info(f"앱 사용 데이터 백업 파일 생성: {backup_file}")
+                except Exception as backup_error:
+                    logging.critical(f"백업 파일 생성 실패: {backup_error}")
 
     def load_timer_data(self):
         """타이머 데이터를 로드합니다."""
@@ -136,22 +189,34 @@ class DataManager:
                         self._data_cache['timer_data'] = data
                         return self._data_cache['timer_data']
                     else:
-                        print("타이머 데이터가 캐시 크기 제한을 초과했습니다")
+                        logging.warning("타이머 데이터가 캐시 크기 제한을 초과했습니다")
                         return data
         except Exception as e:
-            print(f"타이머 데이터 로드 중 오류 발생: {e}")
+            logging.error(f"타이머 데이터 로드 중 오류 발생: {e}")
+            logging.error(traceback.format_exc())
             
-        # 기본 타이머 데이터 구조
-        self._data_cache['timer_data'] = {
-            'app_name': None,
-            'start_time': None,
-            'total_time': 0,
-            'is_active': False,
-            'windows': {},
-            'current_window': None,
-            'last_update': time_module.time()
-        }
-        return self._data_cache['timer_data']
+            # 백업 파일 확인
+            backup_file = f"{TIMER_DATA_FILE}.backup"
+            if os.path.exists(backup_file):
+                try:
+                    with open(backup_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    logging.info(f"백업 파일에서 타이머 데이터 복구 성공")
+                    return data
+                except Exception as backup_error:
+                    logging.error(f"백업 파일에서 타이머 데이터 복구 실패: {backup_error}")
+            
+            # 기본 타이머 데이터 구조
+            self._data_cache['timer_data'] = {
+                'app_name': None,
+                'start_time': None,
+                'total_time': 0,
+                'is_active': False,
+                'windows': {},
+                'current_window': None,
+                'last_update': time_module.time()
+            }
+            return self._data_cache['timer_data']
 
     def save_timer_data(self, data):
         """타이머 데이터를 저장합니다."""

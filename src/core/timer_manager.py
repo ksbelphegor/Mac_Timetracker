@@ -1,12 +1,33 @@
 import time as time_module
+import datetime
+import logging
+from src.core.config import CONFIG
 
 class TimerManager:
-    """타이머 관리 로직을 처리하는 클래스"""
+    """
+    타이머 관리 클래스
+    
+    이 클래스는 앱 사용 시간 추적을 위한 타이머 기능을 관리합니다.
+    타이머 시작, 정지, 일시 중지 및 재개 기능을 제공하며,
+    현재 추적 중인 앱과 창에 대한 시간 정보를 관리합니다.
+    
+    Attributes:
+        data_manager: 데이터 저장 및 로드를 담당하는 DataManager 인스턴스
+        timer_data: 타이머 데이터를 저장하는 딕셔너리
+        _is_initialized: 초기화 완료 여부
+    """
     
     def __init__(self, data_manager):
-        """TimerManager 초기화"""
+        """
+        TimerManager 초기화
+        
+        Args:
+            data_manager: 데이터 저장 및 로드를 담당하는 DataManager 인스턴스
+        """
         self.data_manager = data_manager
-        self.timer_data = self._create_default_timer_data()
+        self.timer_data = self.data_manager.load_timer_data()
+        self._is_initialized = True
+        logging.info("TimerManager 초기화 완료")
         
         # 메모리 캐시 최적화
         self._memory_cache = {

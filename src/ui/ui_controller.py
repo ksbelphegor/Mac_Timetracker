@@ -106,8 +106,8 @@ class UIController:
     def update_time(self):
         """시간 표시를 업데이트합니다."""
         try:
-            # 선택된 앱이 없으면 업데이트 안 함
-            if not self.timer_manager.timer_data.get('app_name'):
+            # timer_data가 None이거나 선택된 앱이 없으면 업데이트 안 함
+            if not self.timer_manager.timer_data or not self.timer_manager.timer_data.get('app_name'):
                 return
             
             # 현재 실행 중인 앱 확인
@@ -162,7 +162,7 @@ class UIController:
         running_apps = self.app_tracker.update_app_list()
         
         # Timer 창의 콤보박스 업데이트
-        current_app = self.timer_manager.timer_data.get('app_name')
+        current_app = self.timer_manager.timer_data.get('app_name') if self.timer_manager.timer_data else None
         self.time_track_widget.app_combo.blockSignals(True)
         self.time_track_widget.update_app_list(running_apps, current_app)
         self.time_track_widget.app_combo.blockSignals(False)

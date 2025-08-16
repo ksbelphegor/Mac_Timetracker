@@ -143,7 +143,8 @@ class TimerKing(QMainWindow):
     def initUI(self):
         """UI 컴포넌트를 초기화합니다."""
         self.setWindowTitle('타임 트래커')
-        self.setFixedSize(1024, 1024)
+        self.setMinimumSize(600, 400)
+        self.resize(1024, 768)
         
         # 기본 위젯 초기화
         self.home_widget = HomeWidget(self)

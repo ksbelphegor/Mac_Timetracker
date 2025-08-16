@@ -18,7 +18,8 @@ class HomeWidget(QWidget):
         
         close_button = QPushButton("Close", self)
         close_button.clicked.connect(self.parent().hide)
-        close_button.setFixedWidth(100)
+        close_button.setMinimumWidth(80)
+        close_button.setMaximumWidth(120)
         
         button_layout.addStretch()
         button_layout.addWidget(close_button)

@@ -26,6 +26,11 @@ class TimerManager:
         """
         self.data_manager = data_manager
         self.timer_data = self.data_manager.load_timer_data()
+        
+        # timer_data가 None인 경우 기본값으로 초기화
+        if self.timer_data is None:
+            self.timer_data = self._create_default_timer_data()
+            
         self._is_initialized = True
         logging.info("TimerManager 초기화 완료")
         

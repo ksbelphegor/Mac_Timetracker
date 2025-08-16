@@ -39,6 +39,12 @@ pip install -r requirements.txt
 
 ## 실행 방법
 
+### 간편 실행 (권장)
+1. **더블클릭으로 실행**: `Mac_Timetracker.command` 파일을 더블클릭
+   - 처음 실행시 자동으로 가상환경 생성 및 패키지 설치
+   - 이후부터는 바로 앱 실행
+
+### 수동 실행
 1. 가상 환경이 활성화된 상태에서:
 ```bash
 python src/main.py
@@ -75,6 +81,28 @@ Mac_Timetracker/
 3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
+
+## 버전 히스토리
+
+### v1.0.1 (2025-08-16)
+**버그 수정 및 UI 개선**
+- 🐛 **버그 수정**: `timer_data`가 `None`인 경우 발생하는 AttributeError 해결
+  - `ui_controller.py`에서 안전한 `None` 체크 추가
+  - `timer_manager.py`에서 기본값 초기화 로직 강화
+  - `app_tracker.py`에서 안전한 데이터 접근 구현
+- 🎨 **UI 개선**: 창 크기 자유 조절 가능
+  - 메인 창 최소 크기 설정 (600x400)
+  - 타이머 위젯 최소 크기 설정 (250x150)
+  - 모든 창에서 크기 조절 가능하도록 변경
+- ⚡ **편의성 개선**: 더블클릭 실행 파일 추가
+  - `Mac_Timetracker.command` 파일로 간편 실행
+  - 자동 가상환경 설정 및 패키지 설치
+
+### v1.0.0
+**초기 릴리스**
+- 기본 앱 사용 시간 추적 기능
+- 상태 표시줄 통합
+- 일별 사용 통계 제공
 
 ## 라이선스
 

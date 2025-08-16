@@ -68,7 +68,8 @@ class TimerWidget(QWidget):
         self.setStyleSheet(COMMON_STYLE)
         
         # 창 크기 조정
-        self.setFixedSize(250, 150)
+        self.setMinimumSize(250, 150)
+        self.resize(350, 200)
 
     def update_app_list(self, apps, current_app=None):
         # 콤보박스 업데이트

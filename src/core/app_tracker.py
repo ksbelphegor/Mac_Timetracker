@@ -162,7 +162,7 @@ class AppTracker:
     def update_usage_stats(self, timer_data):
         """현재 실행 중인 앱의 시간을 업데이트합니다."""
         try:
-            if not timer_data.get('is_active', False) or not timer_data.get('app_name'):
+            if not timer_data or not timer_data.get('is_active', False) or not timer_data.get('app_name'):
                 return
                 
             current_time = time_module.time()

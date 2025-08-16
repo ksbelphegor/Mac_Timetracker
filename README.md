@@ -39,15 +39,47 @@ pip install -r requirements.txt
 
 ## 실행 방법
 
-### 간편 실행 (권장)
+### 🚀 독립 앱 실행 (권장)
+macOS 앱 번들로 독립 실행 가능:
+
+1. **Applications 폴더에서**: `Mac Time Tracker` 앱을 더블클릭
+2. **Spotlight 검색**: `Cmd + Space` → "Mac Time Tracker" 검색 후 실행
+3. **Launchpad**: Launchpad에서 앱 아이콘 클릭
+4. **Dock 추가**: 앱을 Dock으로 드래그하여 빠른 실행
+
+**특징:**
+- ✅ 터미널 없이 독립 실행
+- ✅ Python 환경 설치 불필요
+- ✅ 시스템 권한 자동 요청
+- ✅ macOS 네이티브 앱 경험
+
+### 📝 개발자 실행 방법
+
+#### 간편 실행
 1. **더블클릭으로 실행**: `Mac_Timetracker.command` 파일을 더블클릭
    - 처음 실행시 자동으로 가상환경 생성 및 패키지 설치
    - 이후부터는 바로 앱 실행
 
-### 수동 실행
+#### 수동 실행
 1. 가상 환경이 활성화된 상태에서:
 ```bash
 python src/main.py
+```
+
+#### 앱 번들 생성
+개발자가 앱 번들을 직접 생성하려면:
+```bash
+# py2app 설치
+pip install py2app
+
+# 앱 번들 생성
+python setup.py py2app
+
+# 생성된 앱 실행
+open "dist/Mac Time Tracker.app"
+
+# Applications 폴더로 복사 (선택사항)
+cp -R "dist/Mac Time Tracker.app" /Applications/
 ```
 
 ## 프로젝트 구조
@@ -83,6 +115,21 @@ Mac_Timetracker/
 5. Open a Pull Request
 
 ## 버전 히스토리
+
+### v1.0.2 (2025-08-16)
+**독립 앱 번들 배포**
+- 🚀 **macOS 앱 번들**: py2app을 사용한 독립 실행 앱 생성
+  - `Mac Time Tracker.app` 앱 번들 제공
+  - 터미널 없이 더블클릭으로 실행 가능
+  - Python 환경 설치 불필요한 완전 독립 실행
+  - Applications 폴더 설치 지원
+- ⚙️ **빌드 시스템**: setup.py 파일 추가
+  - py2app 설정 및 최적화
+  - 앱 메타데이터 및 권한 설정
+  - 자동 코드 서명 지원
+- 📖 **문서화**: README에 앱 번들 실행 방법 추가
+  - 사용자 친화적 실행 가이드
+  - 개발자를 위한 빌드 가이드
 
 ### v1.0.1 (2025-08-16)
 **버그 수정 및 UI 개선**

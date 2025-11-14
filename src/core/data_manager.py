@@ -66,7 +66,8 @@ class DataManager:
         """오래된 캐시 데이터를 정리합니다."""
         try:
             logging.info("캐시 정리 시작")
-            # 현재 날짜보다 30일 이상 지난 데이터 정리
+            # 설정된 보관 기간을 기준으로 오래된 데이터 정리
+            retention_days = CONFIG.get('data_management', {}).get('retention_days', 30)
             if self._data_cache['app_usage'] is not None:
                 current_date = datetime.now().date()
                 dates_to_remove = []
@@ -76,7 +77,7 @@ class DataManager:
                         date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
                         days_diff = (current_date - date_obj).days
                         
-                        if days_diff > 30:  # 30일 이상 지난 데이터
+                        if days_diff > retention_days:
                             dates_to_remove.append(date_str)
                     except ValueError:
                         # 잘못된 날짜 형식은 무시

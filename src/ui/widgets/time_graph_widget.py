@@ -165,20 +165,44 @@ class TimeGraphWidget(QWidget):
         painter.setPen(QPen(QColor(60, 60, 60), 1))
         interval = 3600  # 1시간
         start_time = int(time_start // interval) * interval
-        
-        for t in range(int(start_time), int(time_end) + interval, interval):
+        tick_times = list(range(int(start_time), int(time_end) + interval, interval))
+        if not tick_times:
+            return
+
+        metrics = painter.fontMetrics()
+        labels = []
+        for t in tick_times:
             x = int(width * (t - time_start) / (time_end - time_start))
-            
-            # 시간 텍스트 (정시만 표시)
             dt = datetime.fromtimestamp(t)
             time_text = dt.strftime('%H:%M')
-            
-            # 텍스트 중앙 정렬
-            metrics = painter.fontMetrics()
             text_width = metrics.width(time_text)
             text_x = x - text_width // 2
-            painter.setPen(QPen(QColor(200, 200, 200), 1))
-            painter.drawText(text_x, y + height - 5, time_text)
+            text_x = max(0, min(width - text_width, text_x))
+            labels.append({'text': time_text, 'x': text_x, 'width': text_width})
+
+        # 최소 간격을 확보하면서 첫/마지막 라벨은 반드시 표시
+        min_spacing = 6
+        selected_labels = []
+
+        first_label = labels[0]
+        first_label['x'] = max(0, first_label['x'])
+        selected_labels.append(first_label)
+
+        for label in labels[1:-1]:
+            if label['x'] >= selected_labels[-1]['x'] + selected_labels[-1]['width'] + min_spacing:
+                selected_labels.append(label)
+
+        if len(labels) > 1:
+            last_label = labels[-1]
+            last_label['x'] = min(width - last_label['width'], last_label['x'])
+            while (selected_labels and
+                   last_label['x'] < selected_labels[-1]['x'] + selected_labels[-1]['width'] + min_spacing):
+                selected_labels.pop()
+            selected_labels.append(last_label)
+
+        painter.setPen(QPen(QColor(200, 200, 200), 1))
+        for label in selected_labels:
+            painter.drawText(int(label['x']), y + height - 5, label['text'])
 
     def _draw_app_usage(self, painter, time_start, time_end, y, height):
         width = self.width()
@@ -307,7 +331,8 @@ class TimeGraphWidget(QWidget):
             dx = event.pos().x() - self.drag_start_pos.x()
             visible_duration = self.visible_hours * 3600 * self.zoom_level
             time_delta = (dx / self.width()) * visible_duration
-            self.center_time = self.drag_start_time - time_delta
+            # 드래그 방향과 시간 이동 방향을 일치시켜 자연스러운 스크롤 구현
+            self.center_time = self.drag_start_time + time_delta
             self.update()
         
         # 툴팁 표시

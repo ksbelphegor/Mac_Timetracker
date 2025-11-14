@@ -45,7 +45,12 @@ class AppTracker:
         
         # 기본 데이터 초기화
         self.current_date = datetime.datetime.now().date().strftime('%Y-%m-%d')
-        self.app_usage = {'dates': {self.current_date: {}}}
+        loaded_usage = self.data_manager.load_app_usage()
+        if not loaded_usage or 'dates' not in loaded_usage:
+            loaded_usage = {'dates': {}}
+        self.app_usage = loaded_usage
+        self.app_usage.setdefault('dates', {})
+        self.app_usage['dates'].setdefault(self.current_date, {})
         
         # 캐시 및 상태 관리
         self._window_title_cache = {}

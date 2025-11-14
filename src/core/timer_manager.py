@@ -41,7 +41,7 @@ class TimerManager:
             'last_update': 0,
             'last_ui_update': 0,
             'last_save': 0,
-            'pending_updates': set(),
+            'pending_updates': {'timer_data': 0},
             'cache_hits': 0,
             'cache_misses': 0
         }
@@ -67,12 +67,14 @@ class TimerManager:
     def reset_timer(self):
         """타이머를 초기화합니다."""
         self.timer_data = self._create_default_timer_data()
+        self._mark_timer_data_dirty()
         return self.timer_data
     
     def select_app(self, app_name, is_active=False):
         """앱을 선택하고 타이머 데이터를 초기화합니다."""
         self.timer_data = self._create_default_timer_data()
         self.timer_data['app_name'] = app_name
+        self._mark_timer_data_dirty()
         
         if is_active:
             self.start_timer()
@@ -85,7 +87,7 @@ class TimerManager:
         self.timer_data['start_time'] = current_time
         self.timer_data['is_active'] = True
         self.timer_data['last_update'] = current_time
-        self._memory_cache['pending_updates'].add('timer_data')
+        self._mark_timer_data_dirty()
         return self.timer_data
     
     def stop_timer(self):
@@ -94,11 +96,13 @@ class TimerManager:
             return self.timer_data
             
         current_time = time_module.time()
-        elapsed = current_time - self.timer_data['start_time']
+        start_time = self.timer_data.get('start_time')
+        elapsed = max(0, current_time - start_time) if start_time else 0
         self.timer_data['total_time'] += elapsed
         self.timer_data['is_active'] = False
+        self.timer_data['start_time'] = None
         self.timer_data['last_update'] = current_time
-        self._memory_cache['pending_updates'].add('timer_data')
+        self._mark_timer_data_dirty()
         return self.timer_data
     
     def update_timer_status(self, is_active_app, current_time=None):
@@ -120,15 +124,21 @@ class TimerManager:
             else:
                 # 타이머 정지
                 if self.timer_data['is_active']:
-                    elapsed = current_time - self.timer_data['start_time']
+                    start_time = self.timer_data.get('start_time')
+                    elapsed = max(0, current_time - start_time) if start_time else 0
                     self.timer_data['total_time'] += elapsed
                     self.timer_data['is_active'] = False
+                    self.timer_data['start_time'] = None
             
             self.timer_data['last_update'] = current_time
-            self._memory_cache['pending_updates'].add('timer_data')
+            self._mark_timer_data_dirty()
             state_changed = True
         
         return self.timer_data, state_changed
+
+    def _mark_timer_data_dirty(self):
+        pending = self._memory_cache.setdefault('pending_updates', {})
+        pending['timer_data'] = pending.get('timer_data', 0) + 1
     
     def get_formatted_time(self, include_active_time=True):
         """현재 타이머 상태에 따른 시간을 형식에 맞게 변환합니다."""
@@ -164,9 +174,10 @@ class TimerManager:
         """배치로 대기 중인 업데이트를 처리합니다."""
         try:
             current_time = time_module.time()
-            if 'timer_data' in self._memory_cache['pending_updates']:
+            pending = self._memory_cache.get('pending_updates', {})
+            if pending.get('timer_data', 0):
                 self.data_manager.save_timer_data(self.timer_data)
-            self._memory_cache['pending_updates'].clear()
+                pending['timer_data'] = 0
             self._last_batch_process = current_time
             return True
         except Exception as e:
@@ -177,9 +188,10 @@ class TimerManager:
         """대기 중인 업데이트를 처리할지 여부를 결정합니다."""
         if current_time is None:
             current_time = time_module.time()
-            
-        return (len(self._memory_cache['pending_updates']) >= self._batch_size or 
-                (self._memory_cache['pending_updates'] and 
+        pending = self._memory_cache.get('pending_updates', {})
+        pending_count = sum(pending.values())
+        return (pending_count >= self._batch_size or 
+                (pending_count > 0 and 
                  current_time - self._last_batch_process >= 30.0))
     
     def save_timer_data(self):

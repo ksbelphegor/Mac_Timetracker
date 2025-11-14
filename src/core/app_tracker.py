@@ -51,6 +51,8 @@ class AppTracker:
         self.app_usage = loaded_usage
         self.app_usage.setdefault('dates', {})
         self.app_usage['dates'].setdefault(self.current_date, {})
+        # 타이머 누적값 스냅샷
+        self._last_timer_totals = {}
         
         # 캐시 및 상태 관리
         self._window_title_cache = {}
@@ -167,7 +169,7 @@ class AppTracker:
     def update_usage_stats(self, timer_data):
         """현재 실행 중인 앱의 시간을 업데이트합니다."""
         try:
-            if not timer_data or not timer_data.get('is_active', False) or not timer_data.get('app_name'):
+            if not timer_data or not timer_data.get('app_name'):
                 return
                 
             current_time = time_module.time()
@@ -183,31 +185,42 @@ class AppTracker:
                 self.current_date = current_date
             
             # 현재 활성화된 앱의 시간 업데이트
-            if timer_data['is_active'] and timer_data['app_name']:
-                app_name = timer_data['app_name']
-                
-                # 현재 날짜의 앱 데이터 초기화
-                if app_name not in self.app_usage['dates'][current_date]:
-                    self.app_usage['dates'][current_date][app_name] = {
-                        'total_time': 0,
-                        'windows': {},
-                        'is_active': True,
-                        'last_update': current_time
-                    }
-                
-                app_data = self.app_usage['dates'][current_date][app_name]
-                if timer_data['current_window']:
-                    window_key = timer_data['current_window']
+            app_name = timer_data['app_name']
+            app_records = self.app_usage['dates'][current_date]
+            if app_name not in app_records:
+                app_records[app_name] = {
+                    'total_time': 0,
+                    'windows': {},
+                    'is_active': False,
+                    'last_update': current_time
+                }
+
+            app_data = app_records[app_name]
+
+            # 타이머 매니저가 추적 중인 누적 시간(정지 상태 포함)
+            baseline_total = timer_data.get('total_time', 0) or 0
+            start_time = timer_data.get('start_time')
+            if timer_data.get('is_active') and start_time:
+                baseline_total += max(0, current_time - start_time)
+
+            previous_total = self._last_timer_totals.get(app_name, 0)
+            if baseline_total < previous_total:
+                # 타이머가 리셋된 경우, 스냅샷을 새로 시작
+                previous_total = 0
+
+            delta = baseline_total - previous_total
+
+            if delta > 0:
+                app_data['total_time'] += delta
+                window_key = timer_data.get('current_window')
+                if window_key:
                     if window_key not in app_data['windows']:
                         app_data['windows'][window_key] = 0
-                
-                # 시간 계산 및 업데이트
-                elapsed = current_time - timer_data.get('start_time', current_time)
-                app_data['total_time'] += elapsed
-                if timer_data['current_window']:
-                    app_data['windows'][timer_data['current_window']] += elapsed
-                
-                app_data['last_update'] = current_time
+                    app_data['windows'][window_key] += delta
+
+            app_data['is_active'] = timer_data.get('is_active', False)
+            app_data['last_update'] = current_time
+            self._last_timer_totals[app_name] = baseline_total
             
         except Exception as e:
             print(f"앱 사용 통계 업데이트 중 오류 발생: {e}")

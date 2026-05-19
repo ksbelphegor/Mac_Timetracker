@@ -37,6 +37,7 @@ from src.core.data_manager import DataManager
 from src.core.app_tracker import AppTracker
 from src.core.timer_manager import TimerManager
 from src.core.status_bar import StatusBarController
+from src.core.main_window import MainWindow
 
 logger = logging.getLogger(APP_NAME)
 
@@ -62,6 +63,9 @@ class AppDelegate(NSObject):
         # 코어 모듈
         self.app_tracker = AppTracker(self.data_manager)
         self.timer_manager = TimerManager(self.data_manager)
+
+        # 메인 윈도우
+        self.main_window = MainWindow.alloc().init()
 
         # 타이머 참조를 저장 (GC 방지)
         self.update_timer = None
@@ -116,6 +120,15 @@ class AppDelegate(NSObject):
             "오늘: 불러오는 중...", None, ""
         )
         menu.addItem_(self._today_stat_item)
+
+        # 구분선
+        menu.addItem_(NSMenuItem.separatorItem())
+
+        # 메인 창 열기
+        show_window_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "📊 메인 창 열기", objc.selector(self._show_main_window_, signature=b'v@:'), "o"
+        )
+        menu.addItem_(show_window_item)
 
         # 구분선
         menu.addItem_(NSMenuItem.separatorItem())
@@ -187,6 +200,11 @@ class AppDelegate(NSObject):
             if int(time.time()) % 5 == 0:
                 self._update_menu_stats()
 
+            # 메인 창 데이터 갱신 (열려 있을 때만)
+            if self.main_window and self.main_window.window and \
+               self.main_window.window.isVisible():
+                self.main_window.refresh()
+
         except Exception as e:
             logger.error(f"tick 오류: {e}")
             import traceback
@@ -249,6 +267,10 @@ class AppDelegate(NSObject):
     def _quit_(self, sender):
         """종료 액션"""
         NSApp.terminate_(self)
+
+    def _show_main_window_(self, sender):
+        """메인 창 표시"""
+        self.main_window.show()
 
 
 # ──────────────────────────────────────────────

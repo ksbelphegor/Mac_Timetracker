@@ -1,30 +1,27 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.egg-info/
-.installed.cfg
-*.egg
-venv/
-.env
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# macOS
-.DS_Store
-._*
 
 # App data
-.mactimetracker/
-
 # Docker
-dist/
-*.app
-
+# IDE
+# Python
+# macOS
 # py2app build
+*$py.class
+*.app
+*.egg
+*.egg-info/
+*.py[cod]
+*.so
+*.swo
+*.swp
+.DS_Store
+._*
+.env
+.idea/
+.installed.cfg
+.mactimetracker/
+.vscode/
+__pycache__/
 build/
+dist/
+logs/
+venv/

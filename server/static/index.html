@@ -9,52 +9,87 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #0d1117; color: #c9d1d9; padding: 24px;
+    background: #0d1117; color: #c9d1d9; padding: 24px; height: 100vh;
+    display: flex; flex-direction: column;
   }
   .header {
     display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #30363d;
+    margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #30363d;
   }
-  .header h1 { font-size: 24px; }
-  .current-app {
-    background: #161b22; border: 1px solid #30363d; border-radius: 12px;
-    padding: 20px; margin-bottom: 24px; display: flex;
-    justify-content: space-between; align-items: center;
-  }
-  .current-app .app-name { font-size: 28px; font-weight: bold; color: #58a6ff; }
-  .current-app .app-label { font-size: 12px; color: #8b949e; }
-  .current-app .total-time { font-size: 36px; font-weight: bold; color: #3fb950; }
-  .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 24px; }
-  .card {
-    background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 20px;
-  }
-  .card h2 { font-size: 14px; color: #8b949e; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
-  .card-full { grid-column: 1 / -1; }
-  .app-list-item {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 8px 0; border-bottom: 1px solid #21262d;
-  }
-  .app-list-item:last-child { border-bottom: none; }
-  .app-list-name { font-size: 14px; }
-  .app-list-time { font-size: 14px; font-weight: bold; color: #3fb950; }
-  .chart-container { position: relative; height: 200px; }
+  .header h1 { font-size: 22px; }
   .status-dot {
     display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     margin-right: 6px; vertical-align: middle;
   }
   .status-on { background: #3fb950; box-shadow: 0 0 8px #3fb950; }
   .status-off { background: #f85149; }
-  .nav {
-    display: flex; gap: 8px; margin-bottom: 16px;
+  .main-grid {
+    display: grid; grid-template-columns: 1fr 320px; gap: 16px;
+    flex: 1; min-height: 0;
   }
-  .nav button {
-    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
-    padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  /* ── 왼쪽: 상세 패널 ── */
+  .detail-panel {
+    background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+    padding: 20px; display: flex; flex-direction: column; overflow: hidden;
   }
-  .nav button:hover { background: #30363d; }
-  .nav button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
-  @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
-  .updating { color: #8b949e; font-size: 11px; text-align: right; margin-top: 8px; }
+  .detail-header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+    padding-bottom: 12px; border-bottom: 1px solid #30363d;
+  }
+  .detail-header .app-icon { font-size: 28px; }
+  .detail-header .app-name { font-size: 24px; font-weight: bold; color: #58a6ff; }
+  .detail-header .total-time { font-size: 18px; color: #3fb950; margin-left: auto; }
+  .detail-empty {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: #8b949e; font-size: 16px; gap: 8px;
+  }
+
+  /* 세션 리스트 */
+  .session-list { flex: 1; overflow-y: auto; }
+  .session-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid #21262d;
+  }
+  .session-item:last-child { border-bottom: none; }
+  .session-icon { font-size: 14px; min-width: 20px; text-align: center; }
+  .session-body { flex: 1; min-width: 0; }
+  .session-title {
+    font-size: 14px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; color: #c9d1d9;
+  }
+  .session-time {
+    font-size: 12px; color: #8b949e; margin-top: 2px;
+  }
+  .session-duration {
+    font-size: 14px; font-weight: bold; color: #3fb950; min-width: 60px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  /* ── 오른쪽: 앱 목록 ── */
+  .app-panel {
+    background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+    padding: 16px; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .app-panel h2 {
+    font-size: 13px; color: #8b949e; margin-bottom: 12px;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .app-list { flex: 1; overflow-y: auto; }
+  .app-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    transition: background 0.15s; margin-bottom: 2px;
+  }
+  .app-item:hover { background: #21262d; }
+  .app-item.active { background: #1f6feb22; border: 1px solid #1f6feb44; }
+  .app-item-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .app-item-time {
+    font-size: 13px; font-weight: bold; color: #3fb950; margin-left: 8px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  /* 스크롤 */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
 </style>
 </head>
 <body>
@@ -64,119 +99,95 @@
   <span id="status-badge"><span class="status-dot status-off"></span>연결 중...</span>
 </div>
 
-<div class="current-app" id="current-app-card">
-  <div>
-    <div class="app-label">현재 사용 중</div>
-    <div class="app-name" id="current-app-name">—</div>
-    <div class="app-label" id="current-app-title" style="margin-top:4px;"></div>
-  </div>
-  <div style="text-align:right">
-    <div class="app-label">오늘 총 사용 시간</div>
-    <div class="total-time" id="total-time-display">00:00:00</div>
-  </div>
-</div>
-
-<div class="nav">
-  <button class="active" data-days="0" onclick="selectRange(0)">오늘</button>
-  <button data-days="7" onclick="selectRange(7)">7일</button>
-  <button data-days="30" onclick="selectRange(30)">30일</button>
-</div>
-
-<div class="grid">
-  <div class="card">
-    <h2>앱별 사용 시간</h2>
-    <canvas id="appChart"></canvas>
-  </div>
-  <div class="card">
-    <h2>앱 목록</h2>
-    <div id="app-list"></div>
-  </div>
-  <div class="card card-full">
-    <h2>시간대별 사용 내역</h2>
-    <div class="chart-container">
-      <canvas id="timelineChart"></canvas>
+<div class="main-grid">
+  <!-- 왼쪽: 상세 기록 -->
+  <div class="detail-panel" id="detail-panel">
+    <div class="detail-empty" id="detail-empty">
+      <span>👈</span> 앱을 선택하면 여기에 창 제목 기록이 표시됩니다
+    </div>
+    <div id="detail-content" style="display:none;flex-direction:column;flex:1;min-height:0;">
+      <div class="detail-header">
+        <span class="app-icon" id="detail-icon">📌</span>
+        <span class="app-name" id="detail-app-name">—</span>
+        <span class="total-time" id="detail-total-time">—</span>
+      </div>
+      <div class="session-list" id="session-list"></div>
     </div>
   </div>
+
+  <!-- 오른쪽: 앱 목록 -->
+  <div class="app-panel">
+    <h2>앱 목록</h2>
+    <div class="app-list" id="app-list"></div>
+  </div>
 </div>
 
-<div class="updating" id="update-info">실시간 업데이트 중...</div>
-
 <script>
-const COLORS = [
-  '#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff',
-  '#79c0ff', '#56d364', '#e3b341', '#ff7b72', '#d2a8ff',
-  '#a5d6ff', '#7ee787', '#ffd33d', '#ffa198', '#c9d1d9'
-];
-
-let appChart = null;
-let timelineChart = null;
-let daysRange = 0; // 0 = today
+let selectedApp = null;
 
 function fmt(secs) {
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   const s = Math.floor(secs % 60);
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m ${s}s`;
 }
 
-function selectRange(days) {
-  daysRange = days;
-  document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
-  document.querySelector(`.nav button[data-days="${days}"]`).classList.add('active');
-  loadSummary();
+function fmtDuration(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  if (h > 0) return `${h}시간 ${m}분 ${s}초`;
+  if (m > 0) return `${m}분 ${s}초`;
+  return `${s}초`;
 }
 
-async function loadToday() {
+function fmtTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── 앱 목록 로드 (오른쪽) ──
+
+async function loadAppList() {
   try {
     const res = await fetch('/api/today');
     const data = await res.json();
-    document.getElementById('total-time-display').textContent = fmt(data.total_seconds);
+
     document.getElementById('status-badge').innerHTML =
       `<span class="status-dot status-on"></span>연결됨`;
 
-    // 현재 앱
-    if (data.current_app) {
-      document.getElementById('current-app-name').textContent = data.current_app;
-    }
-
-    // 앱 차트
-    const labels = data.apps.map(a => a.name).slice(0, 10);
-    const values = data.apps.map(a => a.seconds).slice(0, 10);
-
-    if (appChart) { appChart.destroy(); }
-    appChart = new Chart(document.getElementById('appChart'), {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{
-          data: values.map(v => (v / 60).toFixed(1)),
-          backgroundColor: labels.map((_, i) => COLORS[i % COLORS.length]),
-          borderRadius: 4,
-        }]
-      },
-      options: {
-        indexAxis: 'y',
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: {
-            title: { display: true, text: '분', color: '#8b949e' },
-            ticks: { color: '#8b949e' },
-            grid: { color: '#21262d' }
-          },
-          y: { ticks: { color: '#c9d1d9' }, grid: { display: false } }
-        }
-      }
-    });
-
-    // 앱 목록
     const listEl = document.getElementById('app-list');
-    listEl.innerHTML = data.apps.slice(0, 15).map(a =>
-      `<div class="app-list-item">
-        <span class="app-list-name">${a.name}</span>
-        <span class="app-list-time">${fmt(a.seconds)}</span>
-      </div>`
-    ).join('');
+    listEl.innerHTML = data.apps.map(a => `
+      <div class="app-item ${selectedApp === a.name ? 'active' : ''}"
+           onclick="selectApp('${escHtml(a.name)}')">
+        <span class="app-item-name">${escHtml(a.name)}</span>
+        <span class="app-item-time">${fmt(a.seconds)}</span>
+      </div>
+    `).join('');
+
+    // 선택된 앱이 있으면 세션도 갱신
+    if (selectedApp) {
+      // 선택된 앱이 목록에 없으면 해제
+      const exists = data.apps.some(a => a.name === selectedApp);
+      if (!exists) {
+        selectedApp = null;
+        showEmpty();
+      } else {
+        // total 시간 업데이트
+        const appData = data.apps.find(a => a.name === selectedApp);
+        if (appData) {
+          document.getElementById('detail-total-time').textContent = fmt(appData.seconds);
+        }
+        loadSessions(selectedApp);
+      }
+    }
 
   } catch(e) {
     document.getElementById('status-badge').innerHTML =
@@ -184,73 +195,74 @@ async function loadToday() {
   }
 }
 
-async function loadTimeline() {
+// ── 세션 로드 (왼쪽) ──
+
+function selectApp(appName) {
+  selectedApp = appName;
+  document.getElementById('detail-content').style.display = 'flex';
+  document.getElementById('detail-empty').style.display = 'none';
+  document.getElementById('detail-app-name').textContent = appName;
+
+  // app-list 하이라이트 갱신
+  document.querySelectorAll('.app-item').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.app-item').forEach(el => {
+    if (el.textContent.trim().startsWith(appName)) {
+      el.classList.add('active');
+    }
+  });
+
+  loadSessions(appName);
+}
+
+function showEmpty() {
+  selectedApp = null;
+  document.getElementById('detail-content').style.display = 'none';
+  document.getElementById('detail-empty').style.display = 'flex';
+}
+
+async function loadSessions(appName) {
   try {
-    const res = await fetch('/api/hourly');
+    const res = await fetch(`/api/sessions/${encodeURIComponent(appName)}`);
     const data = await res.json();
+    const listEl = document.getElementById('session-list');
+    const totalEl = document.getElementById('detail-total-time');
+    let totalSecs = 0;
 
-    const hours = Array.from({length: 24}, (_, i) => `${String(i).padStart(2,'0')}:00`);
-    const allApps = new Set();
-    Object.values(data).forEach(h => Object.keys(h).forEach(a => allApps.add(a)));
-    const appList = [...allApps].slice(0, 8);
+    if (data.sessions.length === 0) {
+      listEl.innerHTML = '<div style="color:#8b949e;text-align:center;padding:20px;">기록된 세션이 없습니다</div>';
+      return;
+    }
 
-    const datasets = appList.map((app, i) => ({
-      label: app,
-      data: hours.map(h => ((data[h] || {})[app] || 0) / 60),
-      backgroundColor: COLORS[i % COLORS.length],
-      borderRadius: 2,
-    }));
+    listEl.innerHTML = data.sessions.map(s => {
+      totalSecs += s.duration;
+      return `
+        <div class="session-item">
+          <span class="session-icon">📄</span>
+          <div class="session-body">
+            <div class="session-title">${escHtml(s.title)}</div>
+            <div class="session-time">${fmtTime(s.start)} ~ ${fmtTime(s.end)}</div>
+          </div>
+          <span class="session-duration">${fmtDuration(s.duration)}</span>
+        </div>
+      `;
+    }).join('');
 
-    if (timelineChart) { timelineChart.destroy(); }
-    timelineChart = new Chart(document.getElementById('timelineChart'), {
-      type: 'bar',
-      data: { labels: hours, datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'bottom', labels: { color: '#8b949e', boxWidth: 12 } }
-        },
-        scales: {
-          x: {
-            stacked: true,
-            ticks: { color: '#8b949e', maxTicksLimit: 12 },
-            grid: { color: '#21262d' }
-          },
-          y: {
-            stacked: true,
-            title: { display: true, text: '분', color: '#8b949e' },
-            ticks: { color: '#8b949e' },
-            grid: { color: '#21262d' }
-          }
-        }
-      }
-    });
-  } catch(e) { /* ignore */ }
+    totalEl.textContent = fmt(totalSecs);
+
+  } catch(e) {
+    document.getElementById('session-list').innerHTML =
+      '<div style="color:#f85149;text-align:center;padding:20px;">로드 실패</div>';
+  }
 }
 
-async function loadSummary() {
-  try {
-    const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - daysRange);
-    const params = new URLSearchParams({
-      start: start.toISOString().slice(0,10),
-      end: end.toISOString().slice(0,10)
-    });
-    // 일단 오늘 데이터로 대체 (summary는 향후 확장)
-    await loadToday();
-  } catch(e) { /* ignore */ }
-}
+// ── 새로고침 ──
 
 function refresh() {
-  loadToday();
-  loadTimeline();
+  loadAppList();
 }
 
-// 3초마다 갱신
 refresh();
-setInterval(refresh, 3000);
+setInterval(refresh, 5000);
 </script>
 </body>
 </html>

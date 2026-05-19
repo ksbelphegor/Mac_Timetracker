@@ -145,3 +145,67 @@ def get_hourly_breakdown(bucket_id: str = "aw-watcher-window",
         hourly[key][app] = hourly[key].get(app, 0) + r["duration"]
 
     return hourly
+
+
+def get_app_sessions(bucket_id: str, app_name: str,
+                     target_date: Optional[str] = None) -> list:
+    """특정 앱의 창 제목별 세션 (시작/종료/지속시간)"""
+    if not target_date:
+        target_date = date.today().isoformat()
+    day_start = datetime.fromisoformat(target_date)
+    day_end = day_start.replace(hour=23, minute=59, second=59)
+    start_ts = day_start.timestamp()
+    end_ts = day_end.timestamp()
+
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT timestamp, duration, data FROM events
+           WHERE bucket_id = ? AND timestamp >= ? AND timestamp <= ?
+           ORDER BY timestamp ASC""",
+        (bucket_id, start_ts, end_ts)
+    ).fetchall()
+    conn.close()
+
+    # 연속된 동일 (app + title) heartbeat를 세션으로 그룹핑
+    sessions = []
+    current = None  # {title, start, end, total_dur}
+
+    for r in rows:
+        data = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+        app = data.get("app", "Unknown")
+        if app != app_name:
+            if current:
+                sessions.append(current)
+                current = None
+            continue
+
+        title = data.get("title", app)
+        ts = r["timestamp"]
+        dur = r["duration"]
+
+        if current is None:
+            # 새 세션
+            current = {
+                "title": title,
+                "start": ts,
+                "end": ts + dur,
+                "duration": dur,
+            }
+        elif current["title"] == title:
+            # 같은 제목 → 연장
+            current["end"] = ts + dur
+            current["duration"] += dur
+        else:
+            # 제목 변경 → 이전 세션 종료, 새 세션 시작
+            sessions.append(current)
+            current = {
+                "title": title,
+                "start": ts,
+                "end": ts + dur,
+                "duration": dur,
+            }
+
+    if current:
+        sessions.append(current)
+
+    return sessions

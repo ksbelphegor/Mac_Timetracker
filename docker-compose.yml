@@ -1,0 +1,11 @@
+services:
+  tracker:
+    build: ./server
+    ports:
+      - "8000:8000"
+    volumes:
+      - tracker_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  tracker_data:

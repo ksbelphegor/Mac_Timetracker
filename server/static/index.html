@@ -4,92 +4,127 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mac Time Tracker</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #0d1117; color: #c9d1d9; padding: 24px; height: 100vh;
+    background: #0d1117; color: #c9d1d9; padding: 20px 24px; height: 100vh;
     display: flex; flex-direction: column;
   }
   .header {
     display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #30363d;
+    margin-bottom: 12px;
   }
-  .header h1 { font-size: 22px; }
-  .status-dot {
-    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-    margin-right: 6px; vertical-align: middle;
+  .header h1 { font-size: 20px; }
+  .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .status-on { background:#3fb950; box-shadow:0 0 8px #3fb950; }
+  .status-off { background:#f85149; }
+  /* ── 탭 ── */
+  .tabs { display:flex; gap:0; margin-bottom:12px; border-bottom:1px solid #30363d; }
+  .tab-btn {
+    padding: 8px 20px; cursor:pointer; font-size:14px; color:#8b949e;
+    border:none; background:none; border-bottom:2px solid transparent;
+    transition: all 0.15s;
   }
-  .status-on { background: #3fb950; box-shadow: 0 0 8px #3fb950; }
-  .status-off { background: #f85149; }
-  .main-grid {
-    display: grid; grid-template-columns: 1fr 320px; gap: 16px;
-    flex: 1; min-height: 0;
+  .tab-btn:hover { color:#c9d1d9; }
+  .tab-btn.active { color:#58a6ff; border-bottom-color:#58a6ff; }
+  .tab-content { display:none; flex:1; min-height:0; }
+  .tab-content.active { display:flex; flex-direction:column; }
+  /* ── 홈 탭 ── */
+  .grid-2 { display:grid; grid-template-columns:1fr 300px; gap:16px; flex:1; min-height:0; }
+  .panel {
+    background:#161b22; border:1px solid #30363d; border-radius:12px;
+    padding:16px; display:flex; flex-direction:column; overflow:hidden;
   }
-  /* ── 왼쪽: 상세 패널 ── */
-  .detail-panel {
-    background: #161b22; border: 1px solid #30363d; border-radius: 12px;
-    padding: 20px; display: flex; flex-direction: column; overflow: hidden;
-  }
-  .detail-header {
-    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
-    padding-bottom: 12px; border-bottom: 1px solid #30363d;
-  }
-  .detail-header .app-icon { font-size: 28px; }
-  .detail-header .app-name { font-size: 24px; font-weight: bold; color: #58a6ff; }
-  .detail-header .total-time { font-size: 18px; color: #3fb950; margin-left: auto; }
   .detail-empty {
-    flex: 1; display: flex; align-items: center; justify-content: center;
-    color: #8b949e; font-size: 16px; gap: 8px;
+    flex:1; display:flex; align-items:center; justify-content:center; color:#8b949e; font-size:15px;
   }
-
-  /* 세션 리스트 */
-  .session-list { flex: 1; overflow-y: auto; }
-  .session-item {
-    display: flex; align-items: center; gap: 12px;
-    padding: 10px 0; border-bottom: 1px solid #21262d;
-  }
-  .session-item:last-child { border-bottom: none; }
-  .session-icon { font-size: 14px; min-width: 20px; text-align: center; }
-  .session-body { flex: 1; min-width: 0; }
-  .session-title {
-    font-size: 14px; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; color: #c9d1d9;
-  }
-  .session-time {
-    font-size: 12px; color: #8b949e; margin-top: 2px;
-  }
-  .session-duration {
-    font-size: 14px; font-weight: bold; color: #3fb950; min-width: 60px; text-align: right;
-    font-variant-numeric: tabular-nums;
-  }
-  /* ── 오른쪽: 앱 목록 ── */
-  .app-panel {
-    background: #161b22; border: 1px solid #30363d; border-radius: 12px;
-    padding: 16px; display: flex; flex-direction: column; overflow: hidden;
-  }
-  .app-panel h2 {
-    font-size: 13px; color: #8b949e; margin-bottom: 12px;
-    text-transform: uppercase; letter-spacing: 1px;
-  }
-  .app-list { flex: 1; overflow-y: auto; }
+  .detail-header { display:flex; align-items:center; gap:10px; margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid #30363d; }
+  .detail-header .app-icon { font-size:22px; }
+  .detail-header .app-name { font-size:18px; font-weight:bold; color:#58a6ff; }
+  .detail-header .total-time { font-size:16px; color:#3fb950; margin-left:auto; }
+  .session-list { flex:1; overflow-y:auto; }
+  .session-item { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid #21262d; }
+  .session-item:last-child { border-bottom:none; }
+  .session-body { flex:1; min-width:0; }
+  .session-title { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#c9d1d9; }
+  .session-time { font-size:11px; color:#8b949e; margin-top:1px; }
+  .session-dur { font-size:13px; font-weight:bold; color:#3fb950; min-width:50px; text-align:right; font-variant-numeric:tabular-nums; }
+  .app-list-scroll { flex:1; overflow-y:auto; }
   .app-item {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 8px 10px; border-radius: 6px; cursor: pointer;
-    transition: background 0.15s; margin-bottom: 2px;
+    display:flex; justify-content:space-between; align-items:center;
+    padding:7px 10px; border-radius:6px; cursor:pointer; transition:background 0.15s; margin-bottom:1px;
   }
-  .app-item:hover { background: #21262d; }
-  .app-item.active { background: #1f6feb22; border: 1px solid #1f6feb44; }
-  .app-item-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .app-item-time {
-    font-size: 13px; font-weight: bold; color: #3fb950; margin-left: 8px;
-    font-variant-numeric: tabular-nums; white-space: nowrap;
+  .app-item:hover { background:#21262d; }
+  .app-item.active { background:#1f6feb22; border:1px solid #1f6feb44; }
+  .app-item-name { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .app-item-time { font-size:13px; font-weight:bold; color:#3fb950; margin-left:8px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  /* ── 브라우저 탭 ── */
+  .browser-search { margin-bottom:10px; }
+  .browser-search input {
+    width:100%; padding:8px 12px; border-radius:8px; border:1px solid #30363d;
+    background:#0d1117; color:#c9d1d9; font-size:13px; outline:none;
   }
-  /* 스크롤 */
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+  .browser-search input:focus { border-color:#58a6ff; }
+  .browser-filters { display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
+  .browser-filter-btn {
+    padding:4px 10px; border-radius:12px; border:1px solid #30363d;
+    background:transparent; color:#8b949e; font-size:11px; cursor:pointer; transition:all 0.15s;
+  }
+  .browser-filter-btn:hover { border-color:#58a6ff; color:#c9d1d9; }
+  .browser-filter-btn.active { background:#1f6feb33; border-color:#1f6feb; color:#58a6ff; }
+  .browser-status { color:#8b949e; font-size:12px; margin-bottom:8px; }
+  .browser-list { flex:1; overflow-y:auto; }
+  .browser-item {
+    display:flex; align-items:center; gap:10px;
+    padding:7px 0; border-bottom:1px solid #21262d; font-size:13px;
+  }
+  .browser-item:last-child { border-bottom:none; }
+  .browser-item-time { color:#8b949e; min-width:48px; font-size:12px; font-variant-numeric:tabular-nums; }
+  .browser-item-app { color:#58a6ff; min-width:80px; font-size:12px; }
+  .browser-item-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+  .browser-item-dur { color:#3fb950; min-width:50px; text-align:right; font-size:12px; font-variant-numeric:tabular-nums; }
+  /* ── 작업(뽀모도로) 탭 ── */
+  .pomodoro-wrap {
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px;
+  }
+  .pomodoro-timer {
+    font-size:96px; font-weight:bold; font-variant-numeric:tabular-nums;
+    letter-spacing:4px; color:#c9d1d9;
+  }
+  .pomodoro-timer.work { color:#f0883e; }
+  .pomodoro-timer.break { color:#3fb950; }
+  .pomodoro-label { font-size:14px; color:#8b949e; margin-top:-10px; }
+  .pomodoro-btns { display:flex; gap:10px; }
+  .pomodoro-btns button {
+    padding:10px 28px; border-radius:10px; border:none; font-size:15px;
+    cursor:pointer; transition:all 0.15s; font-weight:600;
+  }
+  .btn-start { background:#238636; color:#fff; }
+  .btn-start:hover { background:#2ea043; }
+  .btn-pause { background:#d29922; color:#fff; }
+  .btn-pause:hover { background:#e3b341; }
+  .btn-reset { background:#21262d; color:#8b949e; border:1px solid #30363d; }
+  .btn-reset:hover { color:#c9d1d9; background:#30363d; }
+  .pomodoro-stats { text-align:center; margin-top:10px; }
+  .pomodoro-stats .count { font-size:36px; font-weight:bold; color:#3fb950; }
+  .pomodoro-stats .label { font-size:13px; color:#8b949e; }
+  .pomodoro-progress {
+    width:320px; height:6px; background:#21262d; border-radius:3px; overflow:hidden;
+  }
+  .pomodoro-progress-fill {
+    height:100%; background:#f0883e; border-radius:3px; transition:width 1s linear;
+  }
+  .pomodoro-progress-fill.break { background:#3fb950; }
+  .pomodoro-setting { display:flex; gap:16px; margin-top:4px; }
+  .pomodoro-setting label { font-size:12px; color:#8b949e; }
+  .pomodoro-setting input {
+    width:50px; padding:4px 6px; border-radius:4px; border:1px solid #30363d;
+    background:#0d1117; color:#c9d1d9; text-align:center; font-size:12px;
+  }
+  ::-webkit-scrollbar { width:6px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#30363d; border-radius:3px; }
 </style>
 </head>
 <body>
@@ -99,170 +134,318 @@
   <span id="status-badge"><span class="status-dot status-off"></span>연결 중...</span>
 </div>
 
-<div class="main-grid">
-  <!-- 왼쪽: 상세 기록 -->
-  <div class="detail-panel" id="detail-panel">
-    <div class="detail-empty" id="detail-empty">
-      <span>👈</span> 앱을 선택하면 여기에 창 제목 기록이 표시됩니다
-    </div>
-    <div id="detail-content" style="display:none;flex-direction:column;flex:1;min-height:0;">
-      <div class="detail-header">
-        <span class="app-icon" id="detail-icon">📌</span>
-        <span class="app-name" id="detail-app-name">—</span>
-        <span class="total-time" id="detail-total-time">—</span>
+<div class="tabs">
+  <button class="tab-btn active" data-tab="home" onclick="switchTab('home')">🏠 홈</button>
+  <button class="tab-btn" data-tab="browser" onclick="switchTab('browser')">🌐 브라우저</button>
+  <button class="tab-btn" data-tab="work" onclick="switchTab('work')">🍅 작업</button>
+</div>
+
+<!-- ══════ 홈 탭 ══════ -->
+<div class="tab-content active" id="tab-home">
+  <div class="grid-2">
+    <div class="panel" id="home-detail">
+      <div class="detail-empty" id="home-empty">👈 앱을 선택하면 창 제목 기록 표시</div>
+      <div id="home-content" style="display:none;flex-direction:column;flex:1;min-height:0;">
+        <div class="detail-header">
+          <span class="app-icon">📌</span>
+          <span class="app-name" id="home-app-name">—</span>
+          <span class="total-time" id="home-total-time">—</span>
+        </div>
+        <div class="session-list" id="home-sessions"></div>
       </div>
-      <div class="session-list" id="session-list"></div>
+    </div>
+    <div class="panel">
+      <div style="font-size:12px;color:#8b949e;margin-bottom:10px;">앱 목록</div>
+      <div class="app-list-scroll" id="home-app-list"></div>
     </div>
   </div>
+</div>
 
-  <!-- 오른쪽: 앱 목록 -->
-  <div class="app-panel">
-    <h2>앱 목록</h2>
-    <div class="app-list" id="app-list"></div>
+<!-- ══════ 브라우저 탭 ══════ -->
+<div class="tab-content" id="tab-browser">
+  <div class="panel" style="flex:1;min-height:0;">
+    <div class="browser-search">
+      <input type="text" id="browser-search-input" placeholder="🔍 탭 제목 검색..." oninput="loadBrowserSessions()">
+    </div>
+    <div class="browser-filters" id="browser-filters"></div>
+    <div class="browser-status" id="browser-status">로딩 중...</div>
+    <div class="browser-list" id="browser-list"></div>
+  </div>
+</div>
+
+<!-- ══════ 작업 탭 (뽀모도로) ══════ -->
+<div class="tab-content" id="tab-work">
+  <div class="pomodoro-wrap">
+    <div class="pomodoro-label" id="pomo-label">작업 시간</div>
+    <div class="pomodoro-timer work" id="pomo-timer">25:00</div>
+    <div class="pomodoro-progress">
+      <div class="pomodoro-progress-fill" id="pomo-progress" style="width:100%"></div>
+    </div>
+    <div class="pomodoro-btns">
+      <button class="btn-start" id="pomo-start" onclick="pomoStart()">▶ 시작</button>
+      <button class="btn-pause" id="pomo-pause" onclick="pomoPause()" style="display:none">⏸ 일시정지</button>
+      <button class="btn-reset" onclick="pomoReset()">⟲ 초기화</button>
+    </div>
+    <div class="pomodoro-stats">
+      <div class="count" id="pomo-count">0</div>
+      <div class="label">완료한 🍅</div>
+    </div>
+    <div class="pomodoro-setting">
+      <label>작업 <input type="number" id="pomo-work-min" value="25" min="1" max="120" onchange="pomoUpdateSettings()"> 분</label>
+      <label>휴식 <input type="number" id="pomo-break-min" value="5" min="1" max="30" onchange="pomoUpdateSettings()"> 분</label>
+    </div>
   </div>
 </div>
 
 <script>
-let selectedApp = null;
-
+/* ═══════════ 공통 ═══════════ */
 function fmt(secs) {
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = Math.floor(secs % 60);
+  const h = Math.floor(secs / 3600), m = Math.floor((secs%3600)/60), s = Math.floor(secs%60);
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m ${s}s`;
 }
-
-function fmtDuration(secs) {
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = Math.floor(secs % 60);
+function fmtDur(secs) {
+  const h = Math.floor(secs / 3600), m = Math.floor((secs%3600)/60), s = Math.floor(secs%60);
   if (h > 0) return `${h}시간 ${m}분 ${s}초`;
   if (m > 0) return `${m}분 ${s}초`;
   return `${s}초`;
 }
-
 function fmtTime(ts) {
-  const d = new Date(ts * 1000);
-  return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(ts*1000).toLocaleTimeString('ko-KR', {hour:'2-digit',minute:'2-digit'});
+}
+function esc(s) {
+  const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
 }
 
-function escHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
+/* ═══════════ 탭 전환 ═══════════ */
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-'+name));
+  if (name === 'browser') loadBrowserSessions();
 }
 
-// ── 앱 목록 로드 (오른쪽) ──
+/* ═══════════ 홈 탭 ═══════════ */
+let homeSelected = null;
 
-async function loadAppList() {
+async function loadHome() {
   try {
     const res = await fetch('/api/today');
     const data = await res.json();
-
     document.getElementById('status-badge').innerHTML =
       `<span class="status-dot status-on"></span>연결됨`;
 
-    const listEl = document.getElementById('app-list');
-    listEl.innerHTML = data.apps.map(a => `
-      <div class="app-item ${selectedApp === a.name ? 'active' : ''}"
-           onclick="selectApp('${escHtml(a.name)}')">
-        <span class="app-item-name">${escHtml(a.name)}</span>
+    // 앱 목록
+    const listEl = document.getElementById('home-app-list');
+    listEl.innerHTML = data.apps.map(a =>
+      `<div class="app-item ${homeSelected === a.name ? 'active' : ''}"
+           onclick="selectHomeApp('${esc(a.name)}')">
+        <span class="app-item-name">${esc(a.name)}</span>
         <span class="app-item-time">${fmt(a.seconds)}</span>
-      </div>
-    `).join('');
+      </div>`
+    ).join('');
 
-    // 선택된 앱이 있으면 세션도 갱신
-    if (selectedApp) {
-      // 선택된 앱이 목록에 없으면 해제
-      const exists = data.apps.some(a => a.name === selectedApp);
-      if (!exists) {
-        selectedApp = null;
-        showEmpty();
-      } else {
-        // total 시간 업데이트
-        const appData = data.apps.find(a => a.name === selectedApp);
-        if (appData) {
-          document.getElementById('detail-total-time').textContent = fmt(appData.seconds);
-        }
-        loadSessions(selectedApp);
-      }
+    if (homeSelected) {
+      const exists = data.apps.some(a => a.name === homeSelected);
+      if (!exists) { homeSelected = null; showHomeEmpty(); }
+      else loadHomeSessions(homeSelected);
     }
-
   } catch(e) {
     document.getElementById('status-badge').innerHTML =
       `<span class="status-dot status-off"></span>연결 오류`;
   }
 }
 
-// ── 세션 로드 (왼쪽) ──
-
-function selectApp(appName) {
-  selectedApp = appName;
-  document.getElementById('detail-content').style.display = 'flex';
-  document.getElementById('detail-empty').style.display = 'none';
-  document.getElementById('detail-app-name').textContent = appName;
-
-  // app-list 하이라이트 갱신
-  document.querySelectorAll('.app-item').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.app-item').forEach(el => {
-    if (el.textContent.trim().startsWith(appName)) {
-      el.classList.add('active');
-    }
-  });
-
-  loadSessions(appName);
+function selectHomeApp(name) {
+  homeSelected = name;
+  document.getElementById('home-content').style.display = 'flex';
+  document.getElementById('home-empty').style.display = 'none';
+  document.getElementById('home-app-name').textContent = name;
+  loadHomeSessions(name);
 }
 
-function showEmpty() {
-  selectedApp = null;
-  document.getElementById('detail-content').style.display = 'none';
-  document.getElementById('detail-empty').style.display = 'flex';
+function showHomeEmpty() {
+  homeSelected = null;
+  document.getElementById('home-content').style.display = 'none';
+  document.getElementById('home-empty').style.display = 'flex';
 }
 
-async function loadSessions(appName) {
+async function loadHomeSessions(name) {
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(appName)}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(name)}`);
     const data = await res.json();
-    const listEl = document.getElementById('session-list');
-    const totalEl = document.getElementById('detail-total-time');
-    let totalSecs = 0;
+    const listEl = document.getElementById('home-sessions');
+    let total = 0;
+    listEl.innerHTML = data.sessions.map(s => {
+      total += s.duration;
+      return `<div class="session-item">
+        <span class="session-body">
+          <div class="session-title">📄 ${esc(s.title)}</div>
+          <div class="session-time">${fmtTime(s.start)} ~ ${fmtTime(s.end)}</div>
+        </span>
+        <span class="session-dur">${fmtDur(s.duration)}</span>
+      </div>`;
+    }).join('');
+    document.getElementById('home-total-time').textContent = fmt(total);
+  } catch(e) {}
+}
 
-    if (data.sessions.length === 0) {
-      listEl.innerHTML = '<div style="color:#8b949e;text-align:center;padding:20px;">기록된 세션이 없습니다</div>';
-      return;
+/* ═══════════ 브라우저 탭 ═══════════ */
+let browserFilter = '__all__';
+
+function filterBrowser(app) {
+  browserFilter = app;
+  document.querySelectorAll('.browser-filter-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.app === app));
+  loadBrowserSessions();
+}
+
+async function loadBrowserSessions() {
+  const search = (document.getElementById('browser-search-input').value || '').toLowerCase();
+  const statusEl = document.getElementById('browser-status');
+  const listEl = document.getElementById('browser-list');
+  const filterEl = document.getElementById('browser-filters');
+  try {
+    const res = await fetch('/api/browser-sessions');
+    const data = await res.json();
+    let sessions = data.sessions;
+
+    // 브라우저 필터 버튼 생성 (1회)
+    if (!filterEl.dataset.initialized) {
+      const apps = [...new Set(sessions.map(s => s.app))];
+      filterEl.innerHTML = `<button class="browser-filter-btn active" data-app="__all__" onclick="filterBrowser('__all__')">전체</button>`
+        + apps.map(a => `<button class="browser-filter-btn" data-app="${esc(a)}" onclick="filterBrowser('${esc(a)}')">${esc(a)}</button>`).join('');
+      filterEl.dataset.initialized = '1';
     }
 
-    listEl.innerHTML = data.sessions.map(s => {
-      totalSecs += s.duration;
-      return `
-        <div class="session-item">
-          <span class="session-icon">📄</span>
-          <div class="session-body">
-            <div class="session-title">${escHtml(s.title)}</div>
-            <div class="session-time">${fmtTime(s.start)} ~ ${fmtTime(s.end)}</div>
-          </div>
-          <span class="session-duration">${fmtDuration(s.duration)}</span>
-        </div>
-      `;
-    }).join('');
+    // 필터
+    if (browserFilter !== '__all__') sessions = sessions.filter(s => s.app === browserFilter);
+    if (search) sessions = sessions.filter(s => s.title.toLowerCase().includes(search));
 
-    totalEl.textContent = fmt(totalSecs);
-
+    statusEl.textContent = `총 ${sessions.length}개 탭 기록`;
+    listEl.innerHTML = sessions.slice(0, 100).map(s =>
+      `<div class="browser-item">
+        <span class="browser-item-time">${fmtTime(s.start)}</span>
+        <span class="browser-item-app">${esc(s.app.replace(' Browser',''))}</span>
+        <span class="browser-item-title">${esc(s.title)}</span>
+        <span class="browser-item-dur">${fmtDur(s.duration)}</span>
+      </div>`
+    ).join('');
   } catch(e) {
-    document.getElementById('session-list').innerHTML =
-      '<div style="color:#f85149;text-align:center;padding:20px;">로드 실패</div>';
+    statusEl.textContent = '로딩 실패';
   }
 }
 
-// ── 새로고침 ──
+/* ═══════════ 뽀모도로 ═══════════ */
+let pomo = {
+  state: 'idle', // idle | work | break
+  workSec: 25*60, breakSec: 5*60,
+  remaining: 25*60, count: 0,
+  timerId: null,
+};
 
-function refresh() {
-  loadAppList();
+function pomoUpdateSettings() {
+  pomo.workSec = parseInt(document.getElementById('pomo-work-min').value) * 60;
+  pomo.breakSec = parseInt(document.getElementById('pomo-break-min').value) * 60;
+  if (pomo.state === 'idle') {
+    pomo.remaining = pomo.workSec;
+    pomoRender();
+  }
 }
 
+function pomoStart() {
+  if (pomo.state === 'idle' || pomo.state === 'paused') {
+    if (pomo.state === 'idle') {
+      pomo.remaining = pomo.workSec;
+      pomo.state = 'work';
+    } else {
+      pomo.state = pomo.state === 'paused-work' ? 'work' : 'break';
+    }
+    document.getElementById('pomo-start').style.display = 'none';
+    document.getElementById('pomo-pause').style.display = '';
+    pomo.timerId = setInterval(pomoTick, 1000);
+    pomoRender();
+  }
+}
+
+function pomoPause() {
+  if (pomo.state === 'work') pomo.state = 'paused-work';
+  else if (pomo.state === 'break') pomo.state = 'paused-break';
+  clearInterval(pomo.timerId);
+  document.getElementById('pomo-start').style.display = '';
+  document.getElementById('pomo-start').textContent = '▶ 재개';
+  document.getElementById('pomo-pause').style.display = 'none';
+  pomoRender();
+}
+
+function pomoReset() {
+  clearInterval(pomo.timerId);
+  pomo.state = 'idle';
+  pomo.remaining = pomo.workSec;
+  document.getElementById('pomo-start').style.display = '';
+  document.getElementById('pomo-start').textContent = '▶ 시작';
+  document.getElementById('pomo-pause').style.display = 'none';
+  pomoRender();
+}
+
+function pomoTick() {
+  pomo.remaining--;
+  if (pomo.remaining <= 0) {
+    clearInterval(pomo.timerId);
+    if (pomo.state === 'work') {
+      pomo.count++;
+      pomo.state = 'break';
+      pomo.remaining = pomo.breakSec;
+      document.getElementById('pomo-count').textContent = pomo.count;
+      playNotification('🍅 작업 완료! 휴식 시간!');
+    } else {
+      pomo.state = 'work';
+      pomo.remaining = pomo.workSec;
+      playNotification('☕ 휴식 끝! 다시 작업 시작!');
+    }
+    document.getElementById('pomo-start').style.display = '';
+    document.getElementById('pomo-start').textContent = '▶ 시작';
+    document.getElementById('pomo-pause').style.display = 'none';
+    pomo.timerId = setInterval(pomoTick, 1000);
+  }
+  pomoRender();
+}
+
+function playNotification(msg) {
+  if (Notification.permission === 'granted') {
+    new Notification('🍅 Mac Time Tracker', { body: msg });
+  } else if (Notification.permission !== 'denied') {
+    Notification.requestPermission();
+  }
+}
+
+function pomoRender() {
+  const timer = document.getElementById('pomo-timer');
+  const label = document.getElementById('pomo-label');
+  const progress = document.getElementById('pomo-progress');
+
+  const m = Math.floor(pomo.remaining / 60);
+  const s = pomo.remaining % 60;
+  timer.textContent = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+
+  const isWork = pomo.state === 'work' || pomo.state === 'paused-work' || pomo.state === 'idle';
+  timer.className = 'pomodoro-timer ' + (isWork ? 'work' : 'break');
+  progress.className = 'pomodoro-progress-fill ' + (isWork ? '' : 'break');
+
+  const total = isWork ? pomo.workSec : pomo.breakSec;
+  progress.style.width = (total > 0 ? (pomo.remaining / total * 100) : 0) + '%';
+
+  if (pomo.state === 'idle') label.textContent = '🍅 준비 완료';
+  else if (isWork) label.textContent = '🔥 작업 중...';
+  else label.textContent = '☕ 휴식 중...';
+}
+
+/* ═══════════ 새로고침 ═══════════ */
+function refresh() { loadHome(); }
 refresh();
 setInterval(refresh, 5000);
+
+// 알림 권한 요청
+if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 </script>
 </body>
 </html>

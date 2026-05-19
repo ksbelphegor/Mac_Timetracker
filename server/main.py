@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from database import (
     init_db, ensure_bucket, insert_heartbeat,
     get_today_events, get_app_summary, get_hourly_breakdown,
-    get_app_sessions
+    get_app_sessions, get_browser_sessions,
 )
 
 app = FastAPI(title="Mac Time Tracker", version="1.0.0")
@@ -161,6 +161,17 @@ def api_sessions(app_name: str, target_date: str = None):
         })
     result.reverse()  # 최신순
     return {"app": app_name, "sessions": result}
+
+
+@app.get("/api/browser-sessions")
+def api_browser_sessions(target_date: str = None):
+    """모든 브라우저의 탭 세션"""
+    sessions = get_browser_sessions(BUCKET_ID, target_date)
+    for s in sessions:
+        s["start"] = s["start"]
+        s["end"] = s["end"]
+    sessions.reverse()
+    return {"sessions": sessions}
 
 
 # ───── 대시보드 ─────

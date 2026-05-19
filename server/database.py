@@ -209,3 +209,61 @@ def get_app_sessions(bucket_id: str, app_name: str,
         sessions.append(current)
 
     return sessions
+
+
+BROWSER_APPS = {
+    "Brave Browser", "Google Chrome", "Safari", "Firefox",
+    "Microsoft Edge", "Arc", "Orion",
+    "Opera", "Opera GX", "Vivaldi", "Tor Browser",
+}
+
+
+def get_browser_sessions(bucket_id: str = "aw-watcher-window",
+                         target_date: Optional[str] = None) -> list:
+    """브라우저 탭 세션만 추출"""
+    if not target_date:
+        target_date = date.today().isoformat()
+    day_start = datetime.fromisoformat(target_date)
+    day_end = day_start.replace(hour=23, minute=59, second=59)
+    start_ts = day_start.timestamp()
+    end_ts = day_end.timestamp()
+
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT timestamp, duration, data FROM events
+           WHERE bucket_id = ? AND timestamp >= ? AND timestamp <= ?
+           ORDER BY timestamp ASC""",
+        (bucket_id, start_ts, end_ts)
+    ).fetchall()
+    conn.close()
+
+    results = []
+    current = None
+
+    for r in rows:
+        data = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+        app = data.get("app", "Unknown")
+        if app not in BROWSER_APPS:
+            if current:
+                results.append(current)
+                current = None
+            continue
+
+        title = data.get("title", app)
+        ts = r["timestamp"]
+        dur = r["duration"]
+
+        key = f"{app}|||{title}"
+        if current is None:
+            current = {"app": app, "title": title, "start": ts, "end": ts + dur, "duration": dur}
+        elif current["app"] == app and current["title"] == title:
+            current["end"] = ts + dur
+            current["duration"] += dur
+        else:
+            results.append(current)
+            current = {"app": app, "title": title, "start": ts, "end": ts + dur, "duration": dur}
+
+    if current:
+        results.append(current)
+
+    return results

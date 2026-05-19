@@ -1,3 +1,4 @@
-PyQt5>=5.15.0
-pyobjc-core>=9.0
-pyobjc-framework-Cocoa>=9.0 
+# Mac Time Tracker 의존성
+# PyQt5 불필요 — 순수 AppKit(pyobjc)만 있으면 됨
+pyobjc-core>=10.0
+pyobjc-framework-Cocoa>=10.0

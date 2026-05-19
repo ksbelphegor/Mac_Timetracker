@@ -1,85 +1,50 @@
 # Mac Time Tracker (맥 타임좌)
 
-M1 Mac용 앱 사용 시간 추적기입니다. Python과 PyQt5로 개발되었습니다.
+> macOS 상태바에서 실행 중인 앱들의 사용 시간을 추적하는 경량 네이티브 앱입니다.
+> **PyQt5 불필요** — 순수 macOS AppKit(pyobjc)으로 제작되어 가볍고 빠릅니다.
 
 ## 주요 기능
 
-- 실행 중인 앱들의 사용 시간 자동 추적
-- 상태 표시줄에서 현재 앱 사용 시간 실시간 확인
-- 일별 사용 통계 제공
-- 앱별 사용 시간 그래프 시각화
-- 창(윈도우)별 상세 사용 시간 기록
+- 🔍 **실시간 앱 추적**: 현재 사용 중인 앱을 자동 감지 (1초 간격)
+- 📊 **사용 시간 기록**: 앱별/일별 사용 통계 자동 저장
+- 🖥️ **상태바 통합**: 메뉴바에서 현재 앱 사용 시간 확인
+- 📈 **메뉴 통계**: 오늘 총 사용 시간 + 상위 앱별 통계
+- 🚀 **초경량**: PyQt5 제거, `.app` 용량 80MB → ~15MB
 
 ## 시스템 요구사항
 
-- macOS (M1 Mac 최적화)
-- Python 3.x
-- PyQt5
-- pyobjc-core
-- pyobjc-framework-Cocoa
+- macOS 12+ (Monterey 이상)
+- Python 3.9+
+- **설치 불필요**: `.app` 번들을 다운로드하여 실행만 하면 됩니다.
 
 ## 설치 방법
 
-1. 저장소 클론:
+### 사용자용 (앱 번들)
+1. [Releases](https://github.com/ksbelphegor/Mac_Timetracker/releases)에서 최신 `.app` 다운로드
+2. `/Applications/` 폴더로 드래그
+3. 더블클릭하여 실행!
+4. 최초 실행시 Accessibility 권한 요청 → "시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용"에서 터미널(또는 앱)에 체크
+
+### 개발자용
 ```bash
+# 저장소 클론
 git clone https://github.com/ksbelphegor/Mac_Timetracker.git
 cd Mac_Timetracker
-```
 
-2. 가상 환경 생성 및 활성화:
-```bash
-python -m venv venv
+# 가상 환경 (선택)
+python3 -m venv venv
 source venv/bin/activate
-```
 
-3. 필요한 패키지 설치:
-```bash
+# 의존성 설치 (pyobjc만 있음, PyQt5 불필요!)
 pip install -r requirements.txt
-```
 
-## 실행 방법
+# 실행
+python3 src/main.py
 
-### 🚀 독립 앱 실행 (권장)
-macOS 앱 번들로 독립 실행 가능:
-
-1. **Applications 폴더에서**: `Mac Time Tracker` 앱을 더블클릭
-2. **Spotlight 검색**: `Cmd + Space` → "Mac Time Tracker" 검색 후 실행
-3. **Launchpad**: Launchpad에서 앱 아이콘 클릭
-4. **Dock 추가**: 앱을 Dock으로 드래그하여 빠른 실행
-
-**특징:**
-- ✅ 터미널 없이 독립 실행
-- ✅ Python 환경 설치 불필요
-- ✅ 시스템 권한 자동 요청
-- ✅ macOS 네이티브 앱 경험
-
-### 📝 개발자 실행 방법
-
-#### 간편 실행
-1. **더블클릭으로 실행**: `Mac_Timetracker.command` 파일을 더블클릭
-   - 처음 실행시 자동으로 가상환경 생성 및 패키지 설치
-   - 이후부터는 바로 앱 실행
-
-#### 수동 실행
-1. 가상 환경이 활성화된 상태에서:
-```bash
-python src/main.py
-```
-
-#### 앱 번들 생성
-개발자가 앱 번들을 직접 생성하려면:
-```bash
-# py2app 설치
+# 앱 번들 생성 (배포용)
 pip install py2app
-
-# 앱 번들 생성
-python setup.py py2app
-
-# 생성된 앱 실행
+python3 setup.py py2app
 open "dist/Mac Time Tracker.app"
-
-# Applications 폴더로 복사 (선택사항)
-cp -R "dist/Mac Time Tracker.app" /Applications/
 ```
 
 ## 프로젝트 구조
@@ -87,82 +52,26 @@ cp -R "dist/Mac Time Tracker.app" /Applications/
 ```
 Mac_Timetracker/
 ├── src/
-│   ├── core/                # 핵심 기능
-│   │   ├── app_tracker.py   # 앱 추적 로직
-│   │   ├── config.py        # 설정 관리
-│   │   ├── data_manager.py  # 데이터 관리
-│   │   ├── status_bar.py    # 상태 표시줄
-│   │   └── timer_manager.py # 타이머 관리
-│   ├── ui/                  # 사용자 인터페이스
-│   │   ├── widgets/         # UI 위젯 컴포넌트
-│   │   │   ├── app_tracking.py    # 앱 추적 위젯
-│   │   │   ├── home_widget.py     # 홈 화면 위젯
-│   │   │   ├── time_graph_widget.py # 시간 그래프 위젯
-│   │   │   └── timer_widget.py    # 타이머 위젯
-│   │   ├── timer_king.py    # 메인 UI 컨트롤러
-│   │   └── ui_controller.py # UI 컨트롤러
-│   └── main.py              # 프로그램 진입점
-├── requirements.txt         # 의존성 패키지 목록
-└── README.md                # 프로젝트 설명서
+│   ├── core/
+│   │   ├── app_tracker.py    # NSWorkspace 기반 앱 추적
+│   │   ├── config.py         # 설정 관리
+│   │   ├── data_manager.py   # JSON 데이터 저장/로드
+│   │   ├── status_bar.py     # AppKit 네이티브 상태바
+│   │   └── timer_manager.py  # 타이머 관리
+│   └── main.py               # NSApplication 진입점
+├── setup.py                  # py2app 번들링
+├── requirements.txt          # pyobjc만
+└── README.md
 ```
 
-## 기여 방법
+## 파일 구조
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 버전 히스토리
-
-### v1.1.1 (2025-11-15)
-**시간 집계 정확도 수정**
-- ⏲️ **중복 누적 방지**: `AppTracker`가 이제 `TimerManager` 누적치를 스냅샷으로 비교해 직전 변화분만 합산합니다. 덕분에 자동 저장 주기가 짧아도 하루 사용 시간이 두 배 이상 커지는 문제가 사라졌습니다.
-
-### v1.1.0 (2025-11-15)
-**데이터 신뢰성과 그래프 UX 개선**
-- 💾 **앱 사용 데이터 자동 복구**: `AppTracker`가 시작 시 기존 `app_usage.json` 내용을 병합해 하루가 바뀌어도 누적 통계가 사라지지 않습니다.
-- 🗂️ **보관 설정 준수**: `DataManager` 캐시 정리가 `CONFIG.data_management.retention_days`를 따라 오래된 날짜만 정리하고 필요한 데이터만 남깁니다.
-- ⏱️ **타이머 안정성 향상**: `TimerManager`가 `None` 상태를 안전하게 초기화하고 배치 저장 기준을 둬 디스크 I/O를 줄이면서도 상태 변화를 놓치지 않습니다.
-- 📊 **타임라인 조작 감성 개선**: `TimeGraphWidget`의 좌우 드래그 방향을 직관적으로 맞추고, 자정 레이블(00:00)이 잘리지 않도록 위치를 보정했습니다.
-- 🔎 **테스트 도우미 정비**: `test_window_title.py`를 새로 작성해 AppleScript 기반으로 활성 창 제목을 손쉽게 확인할 수 있습니다.
-
-### v1.0.2 (2025-08-16)
-**독립 앱 번들 배포**
-- 🚀 **macOS 앱 번들**: py2app을 사용한 독립 실행 앱 생성
-  - `Mac Time Tracker.app` 앱 번들 제공
-  - 터미널 없이 더블클릭으로 실행 가능
-  - Python 환경 설치 불필요한 완전 독립 실행
-  - Applications 폴더 설치 지원
-- ⚙️ **빌드 시스템**: setup.py 파일 추가
-  - py2app 설정 및 최적화
-  - 앱 메타데이터 및 권한 설정
-  - 자동 코드 서명 지원
-- 📖 **문서화**: README에 앱 번들 실행 방법 추가
-  - 사용자 친화적 실행 가이드
-  - 개발자를 위한 빌드 가이드
-
-### v1.0.1 (2025-08-16)
-**버그 수정 및 UI 개선**
-- 🐛 **버그 수정**: `timer_data`가 `None`인 경우 발생하는 AttributeError 해결
-  - `ui_controller.py`에서 안전한 `None` 체크 추가
-  - `timer_manager.py`에서 기본값 초기화 로직 강화
-  - `app_tracker.py`에서 안전한 데이터 접근 구현
-- 🎨 **UI 개선**: 창 크기 자유 조절 가능
-  - 메인 창 최소 크기 설정 (600x400)
-  - 타이머 위젯 최소 크기 설정 (250x150)
-  - 모든 창에서 크기 조절 가능하도록 변경
-- ⚡ **편의성 개선**: 더블클릭 실행 파일 추가
-  - `Mac_Timetracker.command` 파일로 간편 실행
-  - 자동 가상환경 설정 및 패키지 설치
-
-### v1.0.0
-**초기 릴리스**
-- 기본 앱 사용 시간 추적 기능
-- 상태 표시줄 통합
-- 일별 사용 통계 제공
+### `~/.mactimetracker/`
+- `app_usage.json` — 앱별 일별 사용 시간
+- `timer_data.json` — 현재 세션 타이머 상태
+- `config.json` — 사용자 설정
+- `app.log` — 로그 파일
 
 ## 라이선스
 
-이 프로젝트는 MIT 라이선스를 따릅니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요. 
+MIT License

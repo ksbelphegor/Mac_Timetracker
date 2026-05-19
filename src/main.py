@@ -15,14 +15,14 @@ import threading
 
 import objc
 from Foundation import (
-    NSObject, NSApp,
+    NSObject,
     NSTimer, NSRunLoop, NSDefaultRunLoopMode,
     NSDate, NSBundle
 )
 from AppKit import (
     NSApplication, NSStatusBar, NSVariableStatusItemLength,
     NSImage, NSMenu, NSMenuItem, NSWorkspace,
-    NSApplicationActivationPolicyRegular
+    NSApplicationActivationPolicyRegular, NSApp
 )
 
 # 현재 디렉토리를 Python 경로에 추가
@@ -31,7 +31,7 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-from src.core.config import APP_NAME, BUNDLE_ID, setup_logging, CONFIG
+from src.core.config import APP_NAME, BUNDLE_ID, APP_VERSION, setup_logging, CONFIG
 from src.core.config import APP_USAGE_FILE, TIMER_DATA_FILE
 from src.core.data_manager import DataManager
 from src.core.app_tracker import AppTracker
@@ -248,7 +248,7 @@ class AppDelegate(NSObject):
 
     def _quit_(self, sender):
         """종료 액션"""
-        NSApp().terminate_(self)
+        NSApp.terminate_(self)
 
 
 # ──────────────────────────────────────────────
@@ -258,7 +258,7 @@ class AppDelegate(NSObject):
 def main():
     """앱 진입점"""
     setup_logging()
-    logger.info(f"{APP_NAME} v{CONFIG}")
+    logger.info(f"{APP_NAME} v{APP_VERSION} 시작됨")
 
     # Dock 아이콘 숨기기 (순수 상태바 앱)
     NSBundle.mainBundle().infoDictionary()['LSUIElement'] = True

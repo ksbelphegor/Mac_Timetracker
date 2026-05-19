@@ -11,7 +11,7 @@ import os
 # 앱 정보
 APP_NAME = 'Mac Time Tracker'
 MAIN_SCRIPT = 'src/main.py'
-VERSION = '1.0.1'
+VERSION = '1.1.1'
 
 # 아이콘 파일 (없으면 기본 아이콘 사용)
 ICON_FILE = None

@@ -38,5 +38,8 @@ env/
 ._*
 
 # App specific
-.mac_timetracker/
-*.log 
+.mactimetracker/
+*.log
+
+# Generated test files
+test_import.py

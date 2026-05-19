@@ -2,11 +2,12 @@ import objc
 import time
 from Foundation import NSObject, NSMakeRect, NSMakePoint, NSMakeSize, NSAttributedString, NSFont
 from AppKit import (NSStatusBar, NSVariableStatusItemLength, NSImage, NSMenuItem, NSMenu,
-                   NSView, NSButton, NSButtonTypeMomentaryLight, NSTextField, 
+                   NSView, NSButton, NSButtonTypeMomentaryLight, NSTextField,
                    NSTextAlignmentCenter, NSColor, NSBezierPath, NSFontWeightBold)
 from PyQt5.QtCore import QTimer
 
-from src.core.config import APP_NAME, BUNDLE_ID, STATUS_BAR_WIDTH, STATUS_BAR_HEIGHT, ICON_SIZE
+from src.core.config import APP_NAME, BUNDLE_ID, CONFIG
+
 
 class StatusBarController(NSObject):
     def init(self):
@@ -24,46 +25,53 @@ class StatusBarController(NSObject):
         self.statusItem.setHighlightMode_(True)
 
     def _setup_custom_view(self):
+        ui_config = CONFIG["ui"]
+        status_bar_width = ui_config["status_bar_width"]
+        status_bar_height = ui_config["status_bar_height"]
+        icon_size = ui_config["icon_size"]
+
         self.custom_view = NSView.alloc().initWithFrame_(
-            NSMakeRect(0, 0, STATUS_BAR_WIDTH, STATUS_BAR_HEIGHT))
-        
+            NSMakeRect(0, 0, status_bar_width, status_bar_height))
+
         # 아이콘 설정
         self.icon_view = NSButton.alloc().initWithFrame_(
-            NSMakeRect(0, 0, ICON_SIZE, ICON_SIZE))
+            NSMakeRect(0, 0, icon_size, icon_size))
         self.icon_view.setButtonType_(NSButtonTypeMomentaryLight)
         self.icon_view.setBordered_(False)
         icon_image = NSImage.alloc().initWithSize_(
-            NSMakeSize(ICON_SIZE, ICON_SIZE))
+            NSMakeSize(icon_size, icon_size))
         icon_image.lockFocus()
-        self.draw_clock_icon()
+        self.draw_clock_icon(icon_size)
         icon_image.unlockFocus()
         self.icon_view.setImage_(icon_image)
         self.icon_view.setTarget_(self)
         self.icon_view.setAction_(objc.selector(self.iconClicked_, signature=b'v@:'))
         self.custom_view.addSubview_(self.icon_view)
-        
+
         # 시간 레이블 설정
         self.time_label = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(24, 2, STATUS_BAR_WIDTH - ICON_SIZE - 2, STATUS_BAR_HEIGHT - 4))
+            NSMakeRect(icon_size + 4, 2,
+                       status_bar_width - icon_size - 6,
+                       status_bar_height - 4))
         self.time_label.setBezeled_(False)
         self.time_label.setDrawsBackground_(False)
         self.time_label.setEditable_(False)
         self.time_label.setSelectable_(False)
         self.time_label.setAlignment_(NSTextAlignmentCenter)
-        
+
         # 폰트 설정
         font = NSFont.monospacedDigitSystemFontOfSize_weight_(12, NSFontWeightBold)
         self.time_label.setFont_(font)
-        
+
         self.time_label.setStringValue_("00:00:00")
         self.time_label.setToolTip_("현재 앱 사용 시간")
         self.custom_view.addSubview_(self.time_label)
-        
+
         self.statusItem.setView_(self.custom_view)
 
-    def draw_clock_icon(self):
+    def draw_clock_icon(self, icon_size):
         """시계 아이콘을 그립니다."""
-        width, height = ICON_SIZE, ICON_SIZE
+        width, height = icon_size, icon_size
         NSColor.blackColor().set()
         path = NSBezierPath.bezierPathWithOvalInRect_(
             NSMakeRect(1, 1, width-2, height-2))
@@ -103,8 +111,8 @@ class StatusBarController(NSObject):
         """상태바의 시간 표시를 업데이트합니다."""
         formatted_time = self._format_time(time_text)
         self.time_label.setStringValue_(formatted_time)
-        
-        # 툴크 업데이트
+
+        # 툴팁 업데이트
         hours = int(time_text.split(":")[0])
         if hours > 0:
             tooltip = f"현재 앱 사용 시간: {hours}시간 {time_text[3:]}"

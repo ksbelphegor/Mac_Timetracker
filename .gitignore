@@ -37,6 +37,13 @@ env/
 .LSOverride
 ._*
 
+# py2app build artifacts
+dist/
+*.app
+
 # App specific
-.mac_timetracker/
-*.log 
+.mactimetracker/
+*.log
+
+# Generated files
+test_import.py 

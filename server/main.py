@@ -78,10 +78,18 @@ def api_today():
         total += dur
 
     sorted_apps = sorted(apps.items(), key=lambda x: x[1], reverse=True)
+
+    last_event_data = None
+    if events:
+        last_data = events[-1]["data"]
+        if isinstance(last_data, str):
+            last_data = json.loads(last_data)
+        last_event_data = last_data.get("app")
+
     return {
         "total_seconds": total,
         "apps": [{"name": n, "seconds": s} for n, s in sorted_apps],
-        "current_app": events[-1]["data"].get("app") if events else None
+        "current_app": last_event_data
     }
 
 
@@ -92,7 +100,9 @@ def api_now():
     if not events:
         return {"app": None, "since": None}
     last = events[-1]
-    data = json.loads(last["data"]) if isinstance(last["data"], str) else last["data"]
+    data = last["data"]
+    if isinstance(data, str):
+        data = json.loads(data)
     return {
         "app": data.get("app"),
         "title": data.get("title"),

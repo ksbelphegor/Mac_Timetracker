@@ -67,8 +67,4 @@ setup(
     data_files=[],
     options={'py2app': OPTIONS},
     setup_requires=['py2app'],
-    install_requires=[
-        'pyobjc-core>=10.0',
-        'pyobjc-framework-Cocoa>=10.0',
-    ],
 )

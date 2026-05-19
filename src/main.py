@@ -15,12 +15,12 @@ import threading
 
 import objc
 from Foundation import (
-    NSObject, NSApplication, NSApp,
+    NSObject, NSApp,
     NSTimer, NSRunLoop, NSDefaultRunLoopMode,
     NSDate, NSBundle
 )
 from AppKit import (
-    NSStatusBar, NSVariableStatusItemLength,
+    NSApplication, NSStatusBar, NSVariableStatusItemLength,
     NSImage, NSMenu, NSMenuItem, NSWorkspace,
     NSApplicationActivationPolicyRegular
 )

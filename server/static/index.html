@@ -84,6 +84,17 @@
   .browser-item-app { color:#58a6ff; min-width:80px; font-size:12px; }
   .browser-item-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
   .browser-item-dur { color:#3fb950; min-width:50px; text-align:right; font-size:12px; font-variant-numeric:tabular-nums; }
+  .browser-group { margin-bottom:2px; }
+  .browser-group-header {
+    display:flex; align-items:center; gap:10px; padding:8px 10px;
+    border-radius:6px; cursor:pointer; transition:background 0.15s;
+    background:#161b22; border:1px solid #30363d; margin-bottom:2px;
+  }
+  .browser-group-header:hover { background:#21262d; }
+  .browser-group-name { font-size:14px; font-weight:600; color:#58a6ff; flex:1; }
+  .browser-group-meta { font-size:11px; color:#8b949e; }
+  .browser-group-arrow { font-size:10px; color:#8b949e; transition:transform 0.15s; }
+  .browser-group-items { padding-left:16px; }
   /* ── 작업(뽀모도로) 탭 ── */
   .pomodoro-wrap {
     flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px;
@@ -181,11 +192,12 @@
     <div class="pomodoro-progress">
       <div class="pomodoro-progress-fill" id="pomo-progress" style="width:100%"></div>
     </div>
-    <div class="pomodoro-btns">
-      <button class="btn-start" id="pomo-start" onclick="pomoStart()">▶ 시작</button>
-      <button class="btn-pause" id="pomo-pause" onclick="pomoPause()" style="display:none">⏸ 일시정지</button>
-      <button class="btn-reset" onclick="pomoReset()">⟲ 초기화</button>
-    </div>
+<div class="pomodoro-btns">
+  <button class="btn-start" id="pomo-start" onclick="pomoStart()">▶ 시작</button>
+  <button class="btn-pause" id="pomo-pause" onclick="pomoPause()" style="display:none">⏸ 일시정지</button>
+  <button class="btn-reset" id="pomo-stop" onclick="pomoStop()" style="display:none">■ 중지</button>
+  <button class="btn-reset" onclick="pomoReset()">⟲ 초기화</button>
+</div>
     <div class="pomodoro-stats">
       <div class="count" id="pomo-count">0</div>
       <div class="label">완료한 🍅</div>
@@ -291,12 +303,36 @@ async function loadHomeSessions(name) {
 
 /* ═══════════ 브라우저 탭 ═══════════ */
 let browserFilter = '__all__';
+let groupBySite = false;
+
+function extractSite(title, app) {
+  // 탭 제목에서 사이트명 추출
+  // 패턴: "title - site" 또는 "title | site" (마지막 구분자)
+  const patterns = [/ \| ([^|]+)$/, / — ([^—]+)$/, / - ([^-]+)$/, / – ([^–]+)$/];
+  for (const p of patterns) {
+    const m = title.match(p);
+    if (m) return m[1].trim();
+  }
+  // 구분자가 없으면 앱명 반환
+  return app;
+}
 
 function filterBrowser(app) {
   browserFilter = app;
   document.querySelectorAll('.browser-filter-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.app === app));
   loadBrowserSessions();
+}
+
+function toggleSiteGroup() {
+  groupBySite = !groupBySite;
+  document.getElementById('browser-group-toggle').classList.toggle('active');
+  loadBrowserSessions();
+}
+
+function expandSite(siteKey) {
+  const el = document.getElementById('bs-' + siteKey);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
 }
 
 async function loadBrowserSessions() {
@@ -312,8 +348,10 @@ async function loadBrowserSessions() {
     // 브라우저 필터 버튼 생성 (1회)
     if (!filterEl.dataset.initialized) {
       const apps = [...new Set(sessions.map(s => s.app))];
-      filterEl.innerHTML = `<button class="browser-filter-btn active" data-app="__all__" onclick="filterBrowser('__all__')">전체</button>`
-        + apps.map(a => `<button class="browser-filter-btn" data-app="${esc(a)}" onclick="filterBrowser('${esc(a)}')">${esc(a)}</button>`).join('');
+      filterEl.innerHTML =
+        `<button class="browser-filter-btn active" data-app="__all__" onclick="filterBrowser('__all__')">전체</button>`
+        + apps.map(a => `<button class="browser-filter-btn" data-app="${esc(a)}" onclick="filterBrowser('${esc(a)}')">${esc(a)}</button>`).join('')
+        + `<button class="browser-filter-btn" id="browser-group-toggle" onclick="toggleSiteGroup()">📁 사이트별</button>`;
       filterEl.dataset.initialized = '1';
     }
 
@@ -321,15 +359,51 @@ async function loadBrowserSessions() {
     if (browserFilter !== '__all__') sessions = sessions.filter(s => s.app === browserFilter);
     if (search) sessions = sessions.filter(s => s.title.toLowerCase().includes(search));
 
-    statusEl.textContent = `총 ${sessions.length}개 탭 기록`;
-    listEl.innerHTML = sessions.slice(0, 100).map(s =>
-      `<div class="browser-item">
-        <span class="browser-item-time">${fmtTime(s.start)}</span>
-        <span class="browser-item-app">${esc(s.app.replace(' Browser',''))}</span>
-        <span class="browser-item-title">${esc(s.title)}</span>
-        <span class="browser-item-dur">${fmtDur(s.duration)}</span>
-      </div>`
-    ).join('');
+    if (groupBySite) {
+      // 사이트별 그룹화
+      const groups = {};
+      for (const s of sessions) {
+        const site = extractSite(s.title, s.app);
+        if (!groups[site]) groups[site] = { site, apps: new Set(), total: 0, sessions: [] };
+        groups[site].apps.add(s.app);
+        groups[site].total += s.duration;
+        groups[site].sessions.push(s);
+      }
+      const sorted = Object.values(groups).sort((a, b) => b.total - a.total);
+      statusEl.textContent = `📁 ${sorted.length}개 사이트 · 총 ${sessions.length}개 탭 기록`;
+      listEl.innerHTML = sorted.slice(0, 50).map((g, i) => {
+        const siteKey = esc(g.site).replace(/\s/g, '_') + i;
+        const appsList = [...g.apps].map(a => a.replace(' Browser','')).join(', ');
+        return `<div class="browser-group">
+          <div class="browser-group-header" onclick="expandSite('${siteKey}')">
+            <span class="browser-group-name">📁 ${esc(g.site)}</span>
+            <span class="browser-group-meta">${appsList} · ${fmtDur(g.total)}</span>
+            <span class="browser-group-arrow">▶</span>
+          </div>
+          <div class="browser-group-items" id="bs-${siteKey}" style="display:none">
+            ${g.sessions.map(s => `
+              <div class="browser-item">
+                <span class="browser-item-time">${fmtTime(s.start)}</span>
+                <span class="browser-item-app">${esc(s.app.replace(' Browser',''))}</span>
+                <span class="browser-item-title">${esc(s.title)}</span>
+                <span class="browser-item-dur">${fmtDur(s.duration)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>`;
+      }).join('');
+    } else {
+      // 기본: 시간순 목록
+      statusEl.textContent = `총 ${sessions.length}개 탭 기록`;
+      listEl.innerHTML = sessions.slice(0, 100).map(s =>
+        `<div class="browser-item">
+          <span class="browser-item-time">${fmtTime(s.start)}</span>
+          <span class="browser-item-app">${esc(s.app.replace(' Browser',''))}</span>
+          <span class="browser-item-title">${esc(s.title)}</span>
+          <span class="browser-item-dur">${fmtDur(s.duration)}</span>
+        </div>`
+      ).join('');
+    }
   } catch(e) {
     statusEl.textContent = '로딩 실패';
   }
@@ -353,7 +427,8 @@ function pomoUpdateSettings() {
 }
 
 function pomoStart() {
-  if (pomo.state === 'idle' || pomo.state === 'paused') {
+  const isPaused = pomo.state === 'paused-work' || pomo.state === 'paused-break';
+  if (pomo.state === 'idle' || isPaused) {
     if (pomo.state === 'idle') {
       pomo.remaining = pomo.workSec;
       pomo.state = 'work';
@@ -362,6 +437,7 @@ function pomoStart() {
     }
     document.getElementById('pomo-start').style.display = 'none';
     document.getElementById('pomo-pause').style.display = '';
+    document.getElementById('pomo-stop').style.display = '';
     pomo.timerId = setInterval(pomoTick, 1000);
     pomoRender();
   }
@@ -374,6 +450,17 @@ function pomoPause() {
   document.getElementById('pomo-start').style.display = '';
   document.getElementById('pomo-start').textContent = '▶ 재개';
   document.getElementById('pomo-pause').style.display = 'none';
+  pomoRender();
+}
+
+function pomoStop() {
+  clearInterval(pomo.timerId);
+  pomo.state = 'idle';
+  pomo.remaining = pomo.workSec;
+  document.getElementById('pomo-start').style.display = '';
+  document.getElementById('pomo-start').textContent = '▶ 시작';
+  document.getElementById('pomo-pause').style.display = 'none';
+  document.getElementById('pomo-stop').style.display = 'none';
   pomoRender();
 }
 
@@ -405,6 +492,7 @@ function pomoTick() {
     document.getElementById('pomo-start').style.display = '';
     document.getElementById('pomo-start').textContent = '▶ 시작';
     document.getElementById('pomo-pause').style.display = 'none';
+    document.getElementById('pomo-stop').style.display = 'none';
     pomo.timerId = setInterval(pomoTick, 1000);
   }
   pomoRender();

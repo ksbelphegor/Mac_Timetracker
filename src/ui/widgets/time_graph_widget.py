@@ -335,8 +335,8 @@ class TimeGraphWidget(QWidget):
             self.center_time = self.drag_start_time + time_delta
             self.update()
         
-        # 툴팁 표시
-        if hasattr(self.window(), 'app_usage'):
+        # 툴팁 표시 (self.app_usage 사용, window() 경유보다 안전)
+        if hasattr(self, 'app_usage') and self.app_usage:
             pos = event.pos()
             timeline_height = 30
             graph_margin = 5
@@ -350,7 +350,8 @@ class TimeGraphWidget(QWidget):
                 
                 # 해당 시점에서 실행 중인 앱 찾기
                 found_app = None
-                for app_name, app_data in self.window().app_usage.items():
+                today_str = datetime.now().strftime('%Y-%m-%d')
+                for app_name, app_data in self.app_usage.get('dates', {}).get(today_str, {}).items():
                     start_time = app_data.get('last_update', time.time()) - app_data.get('total_time', 0)
                     end_time = app_data.get('last_update', time.time())
                     

@@ -72,15 +72,22 @@ def insert_heartbeat(bucket_id: str, timestamp: float, duration: float, data: di
     conn.close()
 
 
-def get_today_events(bucket_id: str = "aw-watcher-window") -> list:
-    """오늘의 모든 이벤트를 시간순으로 반환"""
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+def get_today_events(bucket_id: str = "aw-watcher-window",
+                     target_date: Optional[str] = None) -> list:
+    """오늘(또는 특정일)의 모든 이벤트를 시간순으로 반환"""
+    if target_date:
+        day_start = datetime.fromisoformat(target_date).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_ts = day_start.timestamp()
+    day_end = day_start.replace(hour=23, minute=59, second=59)
+    end_ts = day_end.timestamp()
     conn = get_db()
     rows = conn.execute(
         """SELECT timestamp, duration, data FROM events
-           WHERE bucket_id = ? AND timestamp >= ?
+           WHERE bucket_id = ? AND timestamp >= ? AND timestamp <= ?
            ORDER BY timestamp ASC""",
-        (bucket_id, today_start)
+        (bucket_id, start_ts, end_ts)
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]

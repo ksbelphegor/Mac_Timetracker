@@ -66,9 +66,9 @@ def post_simple_heartbeat(payload: HeartbeatPayload):
 # ───── 통계 API ─────
 
 @app.get("/api/today")
-def api_today():
-    """오늘 현재 시간까지의 앱별 통계 + 마지막 창 제목"""
-    events = get_today_events(BUCKET_ID)
+def api_today(target_date: str = None):
+    """오늘(또는 특정일) 앱별 통계 + 마지막 창 제목"""
+    events = get_today_events(BUCKET_ID, target_date)
     apps = {}
     app_titles = {}
     total = 0

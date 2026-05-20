@@ -19,6 +19,18 @@
   .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; }
   .status-on { background:#3fb950; box-shadow:0 0 8px #3fb950; }
   .status-off { background:#f85149; }
+  .date-nav { display:flex;align-items:center;gap:4px; }
+  .date-btn {
+    padding:4px 10px; border-radius:6px; border:1px solid #30363d;
+    background:#21262d; color:#c9d1d9; cursor:pointer; font-size:13px;
+  }
+  .date-btn:hover { background:#30363d; }
+  .today-btn { color:#58a6ff; font-weight:600; }
+  #date-picker {
+    padding:4px 8px; border-radius:6px; border:1px solid #30363d;
+    background:#0d1117; color:#c9d1d9; font-size:13px;
+    color-scheme:dark; cursor:pointer;
+  }
   /* ── 탭 ── */
   .tabs { display:flex; gap:0; margin-bottom:12px; border-bottom:1px solid #30363d; }
   .tab-btn {
@@ -141,7 +153,15 @@
 <body>
 
 <div class="header">
-  <h1>⏱ Mac Time Tracker</h1>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <h1>⏱ Mac Time Tracker</h1>
+    <div class="date-nav">
+      <button class="date-btn" onclick="changeDate(-1)">◀</button>
+      <input type="date" id="date-picker" onchange="onDateChange()">
+      <button class="date-btn" onclick="changeDate(1)">▶</button>
+      <button class="date-btn today-btn" onclick="goToday()">오늘</button>
+    </div>
+  </div>
   <span id="status-badge"><span class="status-dot status-off"></span>연결 중...</span>
 </div>
 
@@ -211,6 +231,8 @@
 
 <script>
 /* ═══════════ 공통 ═══════════ */
+let selectedDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
 function fmt(secs) {
   const h = Math.floor(secs / 3600), m = Math.floor((secs%3600)/60), s = Math.floor(secs%60);
   if (h > 0) return `${h}h ${m}m`;
@@ -229,6 +251,40 @@ function esc(s) {
   const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
 }
 
+/* ═══════════ 날짜 ═══════════ */
+function initDatePicker() {
+  document.getElementById('date-picker').value = selectedDate;
+}
+
+function onDateChange() {
+  selectedDate = document.getElementById('date-picker').value;
+  refreshAll();
+}
+
+function changeDate(delta) {
+  const d = new Date(selectedDate);
+  d.setDate(d.getDate() + delta);
+  selectedDate = d.toISOString().slice(0, 10);
+  document.getElementById('date-picker').value = selectedDate;
+  refreshAll();
+}
+
+function goToday() {
+  selectedDate = new Date().toISOString().slice(0, 10);
+  document.getElementById('date-picker').value = selectedDate;
+  refreshAll();
+}
+
+function refreshAll() {
+  loadHome();
+  if (document.getElementById('tab-browser').classList.contains('active')) loadBrowserSessions();
+}
+
+function dateParam() {
+  const today = new Date().toISOString().slice(0, 10);
+  return selectedDate !== today ? `&target_date=${selectedDate}` : '';
+}
+
 /* ═══════════ 탭 전환 ═══════════ */
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
@@ -241,7 +297,7 @@ let homeSelected = null;
 
 async function loadHome() {
   try {
-    const res = await fetch('/api/today');
+    const res = await fetch('/api/today' + dateParam());
     const data = await res.json();
     document.getElementById('status-badge').innerHTML =
       `<span class="status-dot status-on"></span>연결됨`;
@@ -287,7 +343,7 @@ function showHomeEmpty() {
 
 async function loadHomeSessions(name) {
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(name)}`);
+    const res = await fetch(`/api/sessions/${encodeURIComponent(name)}?target_date=${selectedDate}`);
     const data = await res.json();
     const listEl = document.getElementById('home-sessions');
     let total = 0;
@@ -345,7 +401,7 @@ async function loadBrowserSessions() {
   const listEl = document.getElementById('browser-list');
   const filterEl = document.getElementById('browser-filters');
   try {
-    const res = await fetch('/api/browser-sessions');
+    const res = await fetch('/api/browser-sessions?target_date=' + selectedDate);
     const data = await res.json();
     let sessions = data.sessions;
 
@@ -533,6 +589,7 @@ function pomoRender() {
 
 /* ═══════════ 새로고침 ═══════════ */
 function refresh() { loadHome(); }
+initDatePicker();
 refresh();
 setInterval(refresh, 5000);
 

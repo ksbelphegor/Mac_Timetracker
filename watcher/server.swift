@@ -220,6 +220,12 @@ class HTTPServer {
         if path.hasPrefix("/static/") {
             let relPath = String(path.dropFirst(8))
             let filePath = (staticDir as NSString).appendingPathComponent(relPath)
+            // Path traversal 방어: 실제 경로가 staticDir 내부에 있는지 확인
+            let resolved = (filePath as NSString).standardizingPath
+            let base = (staticDir as NSString).standardizingPath
+            if !resolved.hasPrefix(base + "/") && resolved != base {
+                return .json(404, ["error": "Not Found"])
+            }
             return .file(filePath)
         }
 
@@ -235,8 +241,9 @@ class HTTPServer {
             return .json(400, ["error": "Invalid heartbeat"])
         }
         let duration = json["duration"] as? Double ?? 0
-        let data = json["data"] as? [String: Any] ?? [:]
-        let dataStr = (try? JSONSerialization.data(withJSONObject: data, options: []))
+        let rawData = json["data"] as? [String: Any] ?? [:]
+        // AppKit에서 보내는 data는 [String: String]이지만 안전하게 serialize
+        let dataStr = (try? JSONSerialization.data(withJSONObject: rawData, options: []))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         db.insertHeartbeat(timestamp: timestamp, duration: max(duration, 1.0), data: dataStr)
         return .json(200, ["status": "ok"])
@@ -263,10 +270,11 @@ class HTTPServer {
             guard let dataStr = e["data"] as? String,
                   let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String] else { return nil }
             return [
-                "time": e["timestamp"] as! Double,
+                "time": e["timestamp"] as? Double ?? 0,
                 "app": data["app"] ?? "Unknown",
                 "title": data["title"] ?? "",
-                "duration": e["duration"] as! Double
+                "url": data["url"] ?? "",
+                "duration": e["duration"] as? Double ?? 0
             ]
         }
         return .json(200, ["events": recent])
@@ -299,6 +307,7 @@ class HTTPServer {
         return .json(200, [
             "app": data["app"] as Any,
             "title": data["title"] as Any,
+            "url": data["url"] as Any,
             "since": last["timestamp"] as Any
         ])
     }
@@ -348,7 +357,7 @@ class HTTPServer {
         ]
 
         var pngData: Data?
-        DispatchQueue.main.sync {
+        func loadIcon() {
             let ws = NSWorkspace.shared
             var icon: NSImage?
 
@@ -395,6 +404,12 @@ class HTTPServer {
                 CGImageDestinationFinalize(dest)
                 pngData = data as Data
             }
+        }
+
+        if Thread.isMainThread {
+            loadIcon()
+        } else {
+            DispatchQueue.main.sync { loadIcon() }
         }
 
         // 유효한 아이콘만 캐시 (너무 작으면 기본 문서 아이콘 → 무시)

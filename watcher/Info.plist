@@ -9,9 +9,9 @@
     <key>CFBundleName</key>
     <string>Mac Time Tracker</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>1.2</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.2</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>

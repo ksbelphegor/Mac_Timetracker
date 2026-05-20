@@ -1,5 +1,8 @@
 import Foundation
 import Network
+import UniformTypeIdentifiers
+import ImageIO
+import AppKit
 
 // MARK: - HTTP Server (NWListener)
 
@@ -10,6 +13,9 @@ class HTTPServer {
     let db = Database.shared
 
     private let staticDir: String
+
+    // 앱 아이콘 캐시 { 앱이름: PNG Data }
+    private var iconCache = NSCache<NSString, NSData>()
 
     init(port: UInt16 = 8000) {
         self.port = port
@@ -200,6 +206,11 @@ class HTTPServer {
                 .removingPercentEncoding ?? String(path.dropFirst(14))
             return handleAppSessions(req, appName: appName)
         }
+        if path.hasPrefix("/api/app-icon/") && req.method == "GET" {
+            let appName = String(path.dropFirst(14))
+                .removingPercentEncoding ?? String(path.dropFirst(14))
+            return handleAppIcon(appName: appName)
+        }
 
         // Static files
         if path == "/" || path == "" {
@@ -295,5 +306,62 @@ class HTTPServer {
     private func handleAppSessions(_ req: Request, appName: String) -> Response {
         let sessions = db.buildSessions(appFilter: appName, targetDate: req.query["target_date"])
         return .json(200, ["app": appName, "sessions": sessions])
+    }
+
+    // MARK: - App Icon
+
+    private func handleAppIcon(appName: String) -> Response {
+        guard let pngData = iconData(for: appName) else {
+            return .json(404, ["error": "Icon not found"])
+        }
+        return Response(status: 200,
+            headers: ["Content-Type": "image/png", "Cache-Control": "max-age=86400"],
+            body: pngData)
+    }
+
+    private func iconData(for appName: String) -> Data? {
+        // Cache check
+        let key = appName.lowercased() as NSString
+        if let cached = iconCache.object(forKey: key) { return cached as Data }
+
+        var pngData: Data?
+        DispatchQueue.main.sync {
+            let ws = NSWorkspace.shared
+            var icon: NSImage?
+
+            // 1. 실행 중인 앱에서 아이콘 가져오기
+            if let app = ws.runningApplications.first(where: { $0.localizedName == appName }) {
+                icon = app.icon
+            }
+
+            // 2. 앱 번들 경로 찾아서 아이콘 가져오기
+            if icon == nil, let appPath = ws.fullPath(forApplication: appName) {
+                icon = ws.icon(forFile: appPath)
+            }
+
+            guard let srcIcon = icon else { return }
+
+            // 3. 20x20 PNG로 리사이즈
+            let size = NSSize(width: 20, height: 20)
+            let resized = NSImage(size: size)
+            resized.lockFocusFlipped(false)
+            srcIcon.draw(in: NSRect(origin: .zero, size: size),
+                         from: NSRect(origin: .zero, size: srcIcon.size),
+                         operation: .copy, fraction: 1.0)
+            resized.unlockFocus()
+
+            // 4. PNG 데이터로 변환
+            guard let cgImage = resized.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+            let data = NSMutableData()
+            if let dest = CGImageDestinationCreateWithData(data as CFMutableData,
+                                                           UTType.png.identifier as CFString, 1, nil) {
+                CGImageDestinationAddImage(dest, cgImage, nil)
+                CGImageDestinationFinalize(dest)
+                pngData = data as Data
+            }
+        }
+
+        if let d = pngData { iconCache.setObject(d as NSData, forKey: key) }
+        return pngData
     }
 }

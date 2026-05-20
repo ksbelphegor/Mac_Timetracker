@@ -92,6 +92,7 @@
   .app-item.active { background:#1f6feb22; border:1px solid #1f6feb44; }
   .app-item-name { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .app-item-time { font-size:13px; font-weight:bold; color:#3fb950; margin-left:8px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .app-icon-img { width:18px; height:18px; border-radius:4px; flex-shrink:0; }
   /* ── 브라우저 탭 ── */
   .browser-search { margin-bottom:10px; }
   .browser-search input {
@@ -329,11 +330,14 @@ async function loadHome() {
     document.getElementById('status-badge').innerHTML =
       `<span class="status-dot status-on"></span>연결됨`;
 
-    // 앱 목록
+    // 앱 목록 (아이콘 포함)
     const listEl = document.getElementById('home-app-list');
     listEl.innerHTML = data.apps.map(a =>
       `<div class="app-item ${homeSelected === a.name ? 'active' : ''}"
            onclick="selectHomeApp('${escAttr(a.name)}')">
+        <img class="app-icon-img" src="/api/app-icon/${encodeURIComponent(a.name)}"
+             alt="" loading="lazy"
+             onerror="this.style.display='none'">
         <span class="app-item-name">${esc(a.name)}</span>
         <span class="app-item-time">${fmt(a.seconds)}</span>
       </div>`

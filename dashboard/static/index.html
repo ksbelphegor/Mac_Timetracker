@@ -97,16 +97,20 @@
     transition:background 0.1s;
   }
   .sg-item:hover { background:#1c2129; }
+  .sg-item-spacer { flex:1; min-width:0; }
   .sg-item-start { width:62px; font-variant-numeric:tabular-nums; text-align:right; font-size:11px; }
   .sg-item-end { width:62px; font-variant-numeric:tabular-nums; text-align:right; font-size:11px; }
   .sg-item-dur { width:62px; text-align:right; font-weight:600; color:#3fb950; font-variant-numeric:tabular-nums; font-size:11px; transition:color 0.3s; }
+  .sg-item-arrow { width:10px; flex-shrink:0; }
   .sg-inner-header {
     display:flex; align-items:center; gap:6px;
     padding:6px 10px 4px; font-size:10px; color:#585e6a; border-bottom:1px solid #21262d; margin-bottom:2px;
   }
+  .sg-inner-header .ih-spacer { flex:1; }
   .sg-inner-header .ih-start { width:62px; text-align:right; }
   .sg-inner-header .ih-end { width:62px; text-align:right; }
   .sg-inner-header .ih-dur { width:62px; text-align:right; }
+  .sg-inner-header .ih-empty { width:10px; flex-shrink:0; }
   .sg-header-row {
     display:flex; align-items:center; gap:6px;
     padding:3px 10px 6px; font-size:10px; color:#585e6a; border-bottom:1px solid #21262d; margin-bottom:2px;
@@ -502,17 +506,21 @@ async function loadHomeSessions(name) {
         </div>
         <div class="sg-body" id="${id}" style="display:${isOpen?'':'none'}">
           <div class="sg-inner-header">
+            <span class="ih-spacer"></span>
             <span class="ih-start">시작</span>
             <span class="ih-end">종료</span>
             <span class="ih-dur">활성화</span>
+            <span class="ih-empty"></span>
           </div>
           ${g.sessions.map(s => {
             const sDurSec = Math.round(s.duration);
             const sDurStr = sDurSec >= 60 ? `${Math.floor(sDurSec/60)}분 ${sDurSec%60}초` : `${sDurSec}초`;
             return `<div class="sg-item">
+              <span class="sg-item-spacer"></span>
               <span class="sg-item-start">${fmtTimePrecise(s.start)}</span>
               <span class="sg-item-end">${fmtTimePrecise(s.end)}</span>
               <span class="sg-item-dur">${sDurStr}</span>
+              <span class="sg-item-arrow"></span>
             </div>`;
           }).join('')}
         </div>

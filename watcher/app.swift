@@ -6,7 +6,7 @@ import ApplicationServices
 
 enum Config {
     static let serverURL = "http://localhost:8000"
-    static let heartbeatInterval: TimeInterval = 5
+    static let heartbeatInterval: TimeInterval = 3
     static let statsRefreshInterval: TimeInterval = 60
     static let windowTitleCacheTTL: TimeInterval = 5
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Mac Time Tracker — 올인원 실행 스크립트
-# 더블클릭 한 번으로 설치 + 실행 + 대시보드 오픈까지 전부 처리
+# Swift .app을 빌드해서 실행 (Dock 고정 가능!)
 # =============================================================================
 
 echo "=========================================="
@@ -13,110 +13,67 @@ cd "$SCRIPT_DIR" || { echo "❌ 경로 이동 실패"; exit 1; }
 
 mkdir -p logs
 
-# ── 0. Python 찾기 ──
-# 시스템에 여러 Python이 있을 수 있으니 rumps를 쓸 수 있는 걸 우선
+APP_BUNDLE="$SCRIPT_DIR/Mac Time Tracker.app"
+APP_BINARY="$APP_BUNDLE/Contents/MacOS/MacTT"
 
-PYTHON=""
+# ── 0. Swift 빌드 (없거나 오래됐으면) ──
 
-# 테스트할 Python 후보들
-for cmd in python3 python3.14 python3.13 python3.12 python3.11 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
-    if command -v "$cmd" &>/dev/null; then
-        if "$cmd" -c "import rumps" 2>/dev/null; then
-            PYTHON="$cmd"
-            break
-        fi
-    fi
-done
-
-# 없으면 기본 python3에 설치 시도
-if [ -z "$PYTHON" ]; then
-    PYTHON="python3"
-    NEEDED=()
-    for pkg in rumps requests fastapi uvicorn; do
-        $PYTHON -c "import $pkg" 2>/dev/null || NEEDED+=("$pkg")
-    done
-    $PYTHON -c "import objc" 2>/dev/null || NEEDED+=("pyobjc-framework-Cocoa")
-
-    if [ ${#NEEDED[@]} -gt 0 ]; then
-        echo ""
-        echo "📦 필요한 패키지 설치 중: ${NEEDED[*]}"
-        pip3 install --user "${NEEDED[@]}" 2>&1 | tail -1
-        if [ $? -ne 0 ]; then
-            echo ""
-            echo "⚠️  자동 설치 실패. 아래 명령을 수동으로 실행하세요:"
-            echo "   pip3 install --user rumps pyobjc-framework-Cocoa requests fastapi uvicorn[standard]"
-            echo ""
-            read -p "엔터를 누르면 종료합니다..."
-            exit 1
-        fi
-        echo "✅ 패키지 설치 완료"
-    fi
+NEED_BUILD=false
+if [ ! -f "$APP_BINARY" ]; then
+    NEED_BUILD=true
+elif [ "watcher/tray.swift" -nt "$APP_BINARY" ] || [ "watcher/Info.plist" -nt "$APP_BINARY" ]; then
+    NEED_BUILD=true
 fi
 
-echo "   Python: $($PYTHON --version 2>&1)"
+if [ "$NEED_BUILD" = true ]; then
+    echo ""
+    echo "🔨 Swift 앱 빌드 중..."
+    bash scripts/build-swift.sh 2>&1 | tail -3
+    if [ ! -f "$APP_BINARY" ]; then
+        echo "❌ 빌드 실패"
+        exit 1
+    fi
+    echo "✅ 빌드 완료 (115KB)"
+fi
+
+# ── 1. API 서버 확인 (Swift .app이 내부적으로 실행하지만, 대시보드 빠른 오픈을 위해 선실행) ──
+
 echo ""
-
-# ── 1. API 서버 실행 ──
-
-echo "🚀 1. API 서버 시작 중..."
-
-if [ -f logs/api.pid ]; then
-    kill "$(cat logs/api.pid)" 2>/dev/null
-    sleep 1
-fi
-
-nohup "$PYTHON" dashboard/api.py > logs/api.log 2>&1 &
-API_PID=$!
-echo $API_PID > logs/api.pid
-
-echo "   대기 중..."
-for i in {1..10}; do
-    curl -s -o /dev/null http://localhost:8000/ 2>/dev/null && break
-    sleep 1
-done
-
+echo "🚀 1. API 서버 확인 중..."
 if curl -s -o /dev/null http://localhost:8000/ 2>/dev/null; then
-    echo "✅ API 서버 시작 완료 (http://localhost:8000)"
+    echo "✅ 이미 실행 중"
 else
-    echo "⚠️  API 서버 시작 실패. 로그: logs/api.log"
+    # Swift .app이 서버를 실행할 때까지 잠시 대기
+    echo "   Swift 앱이 서버를 시작합니다..."
 fi
 
-# ── 2. 메뉴바 앱 실행 ──
+# ── 2. Swift 메뉴바 앱 실행 ──
 
 echo ""
 echo "⏱ 2. 메뉴바 트레이 앱 실행 중..."
+open "$APP_BUNDLE"
+echo "✅ Mac Time Tracker.app 실행됨"
+echo "   (메뉴바 ⏱ 아이콘 확인)"
 
-if [ -f logs/tray.pid ]; then
-    kill "$(cat logs/tray.pid)" 2>/dev/null
-    sleep 1
-fi
-
-nohup "$PYTHON" watcher/tray.py > logs/tray.log 2>&1 &
-TRAY_PID=$!
-echo $TRAY_PID > logs/tray.pid
-
-sleep 2
-if kill -0 $TRAY_PID 2>/dev/null; then
-    echo "✅ 메뉴바 앱 실행됨"
-else
-    echo "⚠️  메뉴바 앱 실행 실패. 로그: logs/tray.log"
-fi
-
-# ── 3. 대시보드 열기 ──
+# ── 3. 서버 준비 대기 후 대시보드 열기 ──
 
 echo ""
 echo "📊 3. 대시보드 열기..."
+for i in {1..15}; do
+    curl -s -o /dev/null http://localhost:8000/ 2>/dev/null && break
+    sleep 1
+done
 open http://localhost:8000
 
 echo ""
 echo "=========================================="
-echo "  ✅ 완료! 메뉴바에서 ⏱ 아이콘 확인"
+echo "  ✅ 완료!"
 echo "=========================================="
 echo ""
-echo "  종료: 메뉴바 ⏱ → ✕ 종료"
-echo "        또는 scripts/stop.command"
-echo ""
-echo "  개발: $PYTHON dashboard/api.py --reload  (핫리로드)"
+echo "  - 메뉴바: ⏱ 아이콘"
+echo "  - 대시보드: http://localhost:8000"
+echo "  - 종료: 메뉴바 ⏱ → ✕ 종료"
+echo "  - Dock 고정: Mac Time Tracker.app 을 Dock에 드래그"
 echo ""
 
 read -p "엔터를 누르면 창이 닫힙니다..."

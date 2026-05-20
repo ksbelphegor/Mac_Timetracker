@@ -2,6 +2,7 @@
 .mactimetracker/
 
 # Build artifacts
+*.app
 legacy/build/
 legacy/dist/
 build/

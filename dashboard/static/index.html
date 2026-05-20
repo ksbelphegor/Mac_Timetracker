@@ -85,12 +85,12 @@
   .sg-item-dur { font-weight:600; color:#3fb950; font-size:12px; font-variant-numeric:tabular-nums; }
   .app-list-scroll { flex:1; overflow-y:auto; }
   .app-item {
-    display:flex; justify-content:space-between; align-items:center;
+    display:flex; align-items:center; gap:8px;
     padding:7px 10px; border-radius:6px; cursor:pointer; transition:background 0.15s; margin-bottom:1px;
   }
   .app-item:hover { background:#21262d; }
   .app-item.active { background:#1f6feb22; border:1px solid #1f6feb44; }
-  .app-item-name { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .app-item-name { flex:1; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-right:auto; }
   .app-item-time { font-size:13px; font-weight:bold; color:#3fb950; margin-left:8px; white-space:nowrap; font-variant-numeric:tabular-nums; transition:color 0.3s; }
   .app-icon-img { width:18px; height:18px; border-radius:4px; flex-shrink:0; }
   /* ── 브라우저 탭 ── */

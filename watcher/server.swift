@@ -324,24 +324,60 @@ class HTTPServer {
         let key = appName.lowercased() as NSString
         if let cached = iconCache.object(forKey: key) { return cached as Data }
 
+        // 한글 시스템 앱 → 영문 번들명 매핑 (fullPath가 한글명을 못 찾는 경우 대비)
+        let engFallback: [String: String] = [
+            "메모": "Notes",
+            "시스템 설정": "System Settings",
+            "시스템 환경설정": "System Preferences",
+            "파인더": "Finder",
+            "사파리": "Safari",
+            "미리보기": "Preview",
+            "메시지": "Messages",
+            "미리 알림": "Reminders",
+            "캘린더": "Calendar",
+            "주소록": "Contacts",
+            "음악": "Music",
+            "사진": "Photos",
+            "지도": "Maps",
+            "번역": "Translate",
+            "단축어": "Shortcuts",
+            "스티커": "Stickies",
+            "터미널": "Terminal",
+            "콘솔": "Console",
+            "활성 상태 보기": "Activity Monitor",
+        ]
+
         var pngData: Data?
         DispatchQueue.main.sync {
             let ws = NSWorkspace.shared
             var icon: NSImage?
 
-            // 1. 실행 중인 앱에서 아이콘 가져오기
+            // 1. 실행 중인 앱에서 아이콘 가져오기 (localizedName 매칭)
             if let app = ws.runningApplications.first(where: { $0.localizedName == appName }) {
                 icon = app.icon
             }
 
-            // 2. 앱 번들 경로 찾아서 아이콘 가져오기
+            // 2. 실행 중인 앱을 영문명으로도 시도
+            if icon == nil, let eng = engFallback[appName] {
+                if let app = ws.runningApplications.first(where: { $0.localizedName == eng }) {
+                    icon = app.icon
+                }
+            }
+
+            // 3. 앱 번들 경로 찾아서 아이콘 가져오기 (localized name)
             if icon == nil, let appPath = ws.fullPath(forApplication: appName) {
+                icon = ws.icon(forFile: appPath)
+            }
+
+            // 4. 영문 fallback으로 번들 경로 재시도
+            if icon == nil, let eng = engFallback[appName],
+               let appPath = ws.fullPath(forApplication: eng) {
                 icon = ws.icon(forFile: appPath)
             }
 
             guard let srcIcon = icon else { return }
 
-            // 3. 20x20 PNG로 리사이즈
+            // 5. 20x20 PNG로 리사이즈
             let size = NSSize(width: 20, height: 20)
             let resized = NSImage(size: size)
             resized.lockFocusFlipped(false)
@@ -350,7 +386,7 @@ class HTTPServer {
                          operation: .copy, fraction: 1.0)
             resized.unlockFocus()
 
-            // 4. PNG 데이터로 변환
+            // 6. PNG 데이터로 변환
             guard let cgImage = resized.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
             let data = NSMutableData()
             if let dest = CGImageDestinationCreateWithData(data as CFMutableData,
@@ -361,7 +397,11 @@ class HTTPServer {
             }
         }
 
-        if let d = pngData { iconCache.setObject(d as NSData, forKey: key) }
-        return pngData
+        // 유효한 아이콘만 캐시 (너무 작으면 기본 문서 아이콘 → 무시)
+        if let d = pngData, d.count > 200 {
+            iconCache.setObject(d as NSData, forKey: key)
+            return d
+        }
+        return nil
     }
 }

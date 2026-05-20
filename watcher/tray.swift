@@ -77,8 +77,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkServer()
         startTimers()
 
-        // Accessibility 권한 체크 (1회)
+        // Accessibility 권한 체크 + 변경 감지
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.checkAccessibilityPermission()
+        }
+        workspace.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
             self?.checkAccessibilityPermission()
         }
     }
@@ -340,10 +346,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func sendHeartbeat(app: String, timestamp: Date, duration: TimeInterval) {
         let title = getWindowTitle()
+        let axTrusted = AXIsProcessTrusted()
+        let finalTitle = title.isEmpty ? app : title
         let body: [String: Any] = [
             "timestamp": timestamp.timeIntervalSince1970,
             "duration": max(duration, 1.0),
-            "data": ["app": app, "title": title.isEmpty ? app : title]
+            "data": [
+                "app": app,
+                "title": finalTitle,
+                "_title_src": title.isEmpty ? "fallback(app)" : "ax_api",
+                "_ax_trusted": axTrusted
+            ]
         ]
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body),
               let url = URL(string: "\(Config.serverURL)/api/heartbeat") else { return }

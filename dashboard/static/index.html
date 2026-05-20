@@ -63,11 +63,11 @@
   .session-time { font-size:11px; color:#8b949e; margin-top:1px; }
   .session-dur { font-size:13px; font-weight:bold; color:#3fb950; min-width:50px; text-align:right; font-variant-numeric:tabular-nums; }
   /* ── 세션 그룹 (같은 페이지끼리 묶음) ── */
-  .sg-group { margin-bottom:4px; }
+  .sg-group { margin-bottom:4px; border:1px solid #21262d; border-radius:10px; overflow:hidden; }
   .sg-header {
     display:flex; align-items:center; gap:6px; padding:8px 10px;
-    border-radius:8px; cursor:pointer; transition:background 0.15s;
-    background:#161b22; border:1px solid #30363d;
+    cursor:pointer; transition:background 0.15s;
+    background:#161b22;
   }
   .sg-header:hover { background:#21262d; }
   .sg-title { flex:1; font-size:13px; font-weight:600; color:#c9d1d9; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
@@ -90,7 +90,7 @@
   .sg-list-header .lh-end { width:62px; text-align:right; }
   .sg-list-header .lh-dur { width:62px; text-align:right; }
   .sg-list-header .lh-spacer { width:10px; flex-shrink:0; }
-  .sg-body { padding-left:12px; border-left:2px solid #21262d; margin-left:4px; margin-top:2px; }
+  .sg-body { padding-left:0; margin-top:0; border-top:1px solid #21262d; }
   .sg-item {
     display:flex; align-items:center; gap:6px;
     padding:4px 10px; border-radius:4px; font-size:12px; color:#8b949e;
@@ -102,7 +102,7 @@
   .sg-item-dur { width:62px; text-align:right; font-weight:600; color:#3fb950; font-variant-numeric:tabular-nums; font-size:11px; transition:color 0.3s; }
   .sg-inner-header {
     display:flex; align-items:center; gap:6px;
-    padding:3px 10px 6px; font-size:10px; color:#585e6a; border-bottom:1px solid #21262d; margin-bottom:2px;
+    padding:6px 10px 4px; font-size:10px; color:#585e6a; border-bottom:1px solid #21262d; margin-bottom:2px;
   }
   .sg-inner-header .ih-start { width:62px; text-align:right; }
   .sg-inner-header .ih-end { width:62px; text-align:right; }

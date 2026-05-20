@@ -1,6 +1,6 @@
 services:
   tracker:
-    build: ./server
+    build: ./dashboard
     ports:
       - "8000:8000"
     volumes:

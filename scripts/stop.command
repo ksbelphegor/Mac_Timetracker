@@ -16,7 +16,7 @@ echo ""
 echo "⏱ 1. 메뉴바 앱 종료 중..."
 
 # tray_app.py 프로세스 찾아서 종료
-PIDS=$(ps aux | grep "tray_app.py" | grep -v grep | awk '{print $2}')
+PIDS=$(ps aux | grep "watcher/tray.py" | grep -v grep | awk '{print $2}')
 if [ -n "$PIDS" ]; then
     kill $PIDS 2>/dev/null
     echo "✅ 메뉴바 앱 종료됨"

@@ -58,7 +58,7 @@ echo "⏱ 2. 메뉴바 트레이 앱 실행 중..."
 
 # tray_app.py 백그라운드 실행 (stdout/stderr 로그 파일로)
 mkdir -p "$SCRIPT_DIR/logs"
-nohup python3 agent/tray_app.py > "$SCRIPT_DIR/logs/tray.log" 2>&1 &
+nohup python3 watcher/tray.py > "$SCRIPT_DIR/logs/tray.log" 2>&1 &
 PID=$!
 
 # 실행 확인
@@ -92,7 +92,7 @@ echo "  - 메뉴바 아이콘: ⏱ (시계 모양)"
 echo "  - 대시보드: http://localhost:8000"
 echo "  - 로그: logs/tray.log"
 echo ""
-echo "  종료하려면 bin/stop.command 실행"
+echo "  종료하려면 scripts/stop.command 실행"
 echo ""
 
 read -p "엔터를 누르면 이 창이 닫힙니다..."

@@ -1,10 +1,13 @@
-
 # App data
+.mactimetracker/
+
 # Docker
 # IDE
 # Python
 # macOS
 # py2app build
+legacy/build/
+legacy/dist/
 *$py.class
 *.app
 *.egg
@@ -18,7 +21,6 @@
 .env
 .idea/
 .installed.cfg
-.mactimetracker/
 .vscode/
 __pycache__/
 build/

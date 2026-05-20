@@ -356,6 +356,9 @@ function switchTab(name) {
 let homeSelected = null;
 let sgSortBy = 'duration';
 let sgSortDir = 'desc';
+let expandedTitles = new Set();
+
+function sgId(title) { return 'sg-' + title.replace(/[^a-z0-9가-힣\s_-]/gi, '').slice(0, 60).replace(/\s/g, '_'); }
 
 function sortSG(col) {
   if (sgSortBy === col) sgSortDir = sgSortDir === 'asc' ? 'desc' : 'asc';
@@ -487,15 +490,17 @@ async function loadHomeSessions(name) {
         const last = g.sessions[g.sessions.length - 1];
         const durSec = Math.round(g.total);
         const durStr = durSec >= 60 ? `${Math.floor(durSec/60)}분 ${durSec%60}초` : `${durSec}초`;
+        const id = sgId(g.title);
+        const isOpen = expandedTitles.has(g.title);
         return `<div class="sg-group">
-        <div class="sg-header" onclick="toggleSG(${gi})">
+        <div class="sg-header" onclick="toggleSG('${escAttr(g.title)}')">
           <span class="sg-title">📄 ${esc(g.title)}</span>
           <span class="sg-hdr-start">${fmtTimePrecise(first.start)}</span>
           <span class="sg-hdr-end">${fmtTimePrecise(last.end)}</span>
           <span class="sg-hdr-dur">${durStr}</span>
-          <span class="sg-arrow" id="sg-arr-${gi}">▶</span>
+          <span class="sg-arrow" id="arr-${id}">${isOpen?'▼':'▶'}</span>
         </div>
-        <div class="sg-body" id="sg-${gi}" style="display:none">
+        <div class="sg-body" id="${id}" style="display:${isOpen?'':'none'}">
           <div class="sg-inner-header">
             <span class="ih-start">시작</span>
             <span class="ih-end">종료</span>
@@ -519,13 +524,16 @@ async function loadHomeSessions(name) {
   } catch(e) { console.error('loadHomeSessions:', e); }
 }
 
-function toggleSG(i) {
-  const body = document.getElementById('sg-' + i);
-  const arr = document.getElementById('sg-arr-' + i);
+function toggleSG(title) {
+  const id = sgId(title);
+  const body = document.getElementById(id);
+  const arr = document.getElementById('arr-' + id);
   if (!body) return;
   const open = body.style.display !== 'none';
   body.style.display = open ? 'none' : '';
-  if (arr) arr.classList.toggle('open', !open);
+  if (arr) arr.textContent = open ? '▶' : '▼';
+  if (open) expandedTitles.delete(title);
+  else expandedTitles.add(title);
 }
 
 /* ═══════════ 브라우저 탭 ═══════════ */

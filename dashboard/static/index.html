@@ -71,9 +71,7 @@
   }
   .sg-header:hover { background:#21262d; }
   .sg-title { flex:1; font-size:13px; font-weight:600; color:#c9d1d9; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
-  .sg-hdr-start { width:62px; font-size:11px; color:#8b949e; font-variant-numeric:tabular-nums; text-align:right; }
-  .sg-hdr-end { width:62px; font-size:11px; color:#8b949e; font-variant-numeric:tabular-nums; text-align:right; }
-  .sg-hdr-dur { width:52px; font-size:11px; font-weight:600; color:#3fb950; text-align:right; font-variant-numeric:tabular-nums; }
+  .sg-hdr-dur { width:62px; font-size:11px; font-weight:600; color:#3fb950; text-align:right; font-variant-numeric:tabular-nums; }
   .sg-arrow { width:10px; font-size:10px; color:#8b949e; transition:transform 0.2s; flex-shrink:0; }
   .sg-arrow.open { transform:rotate(90deg); }
   .sg-list-header {
@@ -81,9 +79,7 @@
     padding:0 10px 6px; font-size:10px; color:#585e6a; border-bottom:1px solid #21262d; margin-bottom:6px;
   }
   .sg-list-header .lh-title { flex:1; }
-  .sg-list-header .lh-start { width:62px; text-align:right; }
-  .sg-list-header .lh-end { width:62px; text-align:right; }
-  .sg-list-header .lh-dur { width:52px; text-align:right; }
+  .sg-list-header .lh-dur { width:62px; text-align:right; }
   .sg-list-header .lh-spacer { width:10px; flex-shrink:0; }
   .sg-body { padding-left:12px; border-left:2px solid #21262d; margin-left:4px; margin-top:2px; }
   .sg-item {
@@ -95,6 +91,10 @@
   .sg-item-start { width:68px; font-variant-numeric:tabular-nums; text-align:right; }
   .sg-item-end { width:68px; font-variant-numeric:tabular-nums; text-align:right; }
   .sg-item-dur { flex:1; text-align:right; font-weight:600; color:#3fb950; font-variant-numeric:tabular-nums; transition:color 0.3s; }
+  .sg-inner-header {
+    display:flex; align-items:center; gap:6px;
+    padding:3px 10px 6px; font-size:10px; color:#585e6a; border-bottom:1px solid #21262d; margin-bottom:2px;
+  }
   .sg-header-row {
     display:flex; align-items:center; gap:6px;
     padding:3px 10px 6px; font-size:10px; color:#585e6a; border-bottom:1px solid #21262d; margin-bottom:2px;
@@ -437,25 +437,24 @@ async function loadHomeSessions(name) {
     listEl.innerHTML = `
       <div class="sg-list-header">
         <span class="lh-title">페이지</span>
-        <span class="lh-start">시작</span>
-        <span class="lh-end">종료</span>
         <span class="lh-dur">활성화</span>
         <span class="lh-spacer"></span>
       </div>
       ${sorted.map((g, gi) => {
-        const first = g.sessions[0];
-        const last = g.sessions[g.sessions.length - 1];
         const durSec = Math.round(g.total);
         const durStr = durSec >= 60 ? `${Math.floor(durSec/60)}분 ${durSec%60}초` : `${durSec}초`;
         return `<div class="sg-group">
         <div class="sg-header" onclick="toggleSG(${gi})">
           <span class="sg-title">📄 ${esc(g.title)}</span>
-          <span class="sg-hdr-start">${fmtTimePrecise(first.start)}</span>
-          <span class="sg-hdr-end">${fmtTimePrecise(last.end)}</span>
           <span class="sg-hdr-dur">${durStr}</span>
           <span class="sg-arrow" id="sg-arr-${gi}">▶</span>
         </div>
         <div class="sg-body" id="sg-${gi}" style="display:none">
+          <div class="sg-inner-header">
+            <span class="sg-item-start" style="color:#585e6a;font-weight:400;">시작</span>
+            <span class="sg-item-end" style="color:#585e6a;font-weight:400;">종료</span>
+            <span class="sg-item-dur" style="color:#585e6a;font-weight:400;">활성화</span>
+          </div>
           ${g.sessions.map(s => {
             const sDurSec = Math.round(s.duration);
             const sDurStr = sDurSec >= 60 ? `${Math.floor(sDurSec/60)}분 ${sDurSec%60}초` : `${sDurSec}초`;

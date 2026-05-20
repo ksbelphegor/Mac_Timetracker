@@ -1,5 +1,6 @@
 import Cocoa
 import Foundation
+import ApplicationServices
 
 // MARK: - Configuration
 
@@ -176,26 +177,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func checkAccessibilityPermission() {
-        // 간단한 AX 체크: 권한이 없으면 사용자에게 설정 안내
-        let checkScript = """
-        tell application "System Events"
-            set appList to name of every process
-        end tell
-        """
-        guard let script = NSAppleScript(source: checkScript) else { return }
-        var error: NSDictionary?
-        _ = script.executeAndReturnError(&error)
-        if error != nil {
-            DispatchQueue.main.async { [weak self] in
-                self?.showAccessibilityPrompt()
-            }
+        if AXIsProcessTrusted() {
+            print("✅ AX 권한 있음")
+            return
+        }
+        print("⚠️ AX 권한 없음 — 다이얼로그 표시")
+        DispatchQueue.main.async { [weak self] in
+            self?.showAccessibilityPrompt()
         }
     }
 
     func showAccessibilityPrompt() {
         let alert = NSAlert()
-        alert.messageText = "Mac Time Tracker"
-        alert.informativeText = "창 제목 추적을 위해 손쉬운 사용(Accessibility) 권한이 필요합니다.\n\n시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용 → Mac Time Tracker.app 추가"
+        alert.messageText = "🔒 Accessibility 권한 필요"
+        alert.informativeText = "Mac Time Tracker가 창 제목을 추적하려면 손쉬운 사용 권한이 필요합니다.\n\n"
+            + "1. 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용\n"
+            + "2. Mac Time Tracker.app 추가 (➕ 버튼)\n"
+            + "3. 체크박스 활성화\n\n"
+            + "권한 추가 후 Mac Time Tracker를 재시작하세요."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "시스템 설정 열기")
         alert.addButton(withTitle: "나중에")
@@ -283,13 +282,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         var title = ""
-        let appName = getFrontmostApp()
+        guard let app = workspace.frontmostApplication,
+              let name = app.localizedName else {
+            windowTitle = ""
+            windowTitleTime = now
+            return ""
+        }
 
-        if let script = Config.browserScripts[appName] {
+        // 1. 브라우저는 AppleScript 우선 (직접 통신, AX 불필요)
+        if let script = Config.browserScripts[name] {
             title = runAppleScript(script)
         }
+
+        // 2. AX API로 직접 창 제목 가져오기 (모든 앱)
         if title.isEmpty {
-            title = axWindowTitle(appName: appName)
+            title = axWindowTitle(pid: app.processIdentifier)
         }
 
         windowTitle = title
@@ -313,10 +320,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return ""
     }
 
-    func axWindowTitle(appName: String) -> String {
-        guard !appName.isEmpty else { return "" }
-        return runAppleScript(
-            "tell application \"System Events\" to tell process \"\(appName)\" to get title of window 1")
+    func axWindowTitle(pid: pid_t) -> String {
+        let appRef = AXUIElementCreateApplication(pid)
+        // focused window → title
+        var focused: CFTypeRef?
+        let focusResult = AXUIElementCopyAttributeValue(
+            appRef, kAXFocusedWindowAttribute as CFString, &focused)
+        guard focusResult == .success else { return "" }
+
+        let winElement = focused as! AXUIElement
+        var title: CFTypeRef?
+        let titleResult = AXUIElementCopyAttributeValue(
+            winElement, kAXTitleAttribute as CFString, &title)
+        guard titleResult == .success, let str = title as? String else { return "" }
+        return str.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - HTTP

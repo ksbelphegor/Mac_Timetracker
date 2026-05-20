@@ -8,8 +8,6 @@ enum Config {
     static let heartbeatInterval: TimeInterval = 5
     static let statsRefreshInterval: TimeInterval = 60
     static let windowTitleCacheTTL: TimeInterval = 2
-    static let serverStartRetries = 6
-    static let serverRetryDelay: TimeInterval = 1.0
 
     static let browserScripts: [String: String] = [
         "Brave Browser": "tell application \"Brave Browser\" to get title of active tab of window 1",
@@ -22,17 +20,10 @@ enum Config {
         "Opera GX": "tell application \"Opera GX\" to get title of active tab of window 1",
         "Orion": "tell application \"Orion\" to get title of active tab of window 1",
     ]
-
-    /// Known-good Python paths (checked at startup for package availability)
-    static let pythonCandidates = [
-        "/Users/JSK/hermes-agent/venv/bin/python3",
-        "/opt/homebrew/bin/python3",
-    ]
 }
 
 // MARK: - AppDelegate
 
-@main
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     let workspace = NSWorkspace.shared
@@ -60,8 +51,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Server process
     var serverProcess: Process?
-    var serverStarting = false
-    var resolvedPython: String?
 
     var scriptDir: String {
         let bin = (#file as NSString).deletingLastPathComponent
@@ -77,13 +66,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(toggleMenu)
         }
         setupMenu()
-        // 서버 시작을 비동기로 — 앱 시작 블로킹 금지
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.findPythonExecutable()
-            self?.ensureServerRunning()
-        }
+        startServer()
         observeAppSwitches()
         setCurrentApp()
+        checkServer()
         startTimers()
     }
 
@@ -122,137 +108,62 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = nil
     }
 
-    // MARK: - Python / Server Management
+    // MARK: - Server Management
 
-    /// 올바른 Python 실행파일을 찾아 resolvedPython에 저장
-    func findPythonExecutable() {
-        // 이미 찾은 적 있으면 skip
-        if resolvedPython != nil { return }
-
-        for path in Config.pythonCandidates {
-            guard FileManager.default.isExecutableFile(atPath: path) else { continue }
-            // 필수 패키지 존재 여부 확인
-            let check = Process()
-            check.executableURL = URL(fileURLWithPath: path)
-            check.arguments = ["-c", "import fastapi, uvicorn; print('ok')"]
-            let pipe = Pipe()
-            check.standardOutput = pipe
-            check.standardError = pipe
-            do {
-                try check.run()
-                check.waitUntilExit()
-                if check.terminationStatus == 0 {
-                    resolvedPython = path
-                    print("✅ Python 발견: \(path)")
-                    return
+    func startServer() {
+        // 이미 서버가 실행 중인지 확인
+        let semaphore = DispatchSemaphore(value: 0)
+        var serverAlreadyRunning = false
+        if let url = URL(string: "\(Config.serverURL)/api/today") {
+            URLSession.shared.dataTask(with: url) { data, resp, error in
+                if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 {
+                    serverAlreadyRunning = true
                 }
-            } catch {}
+                semaphore.signal()
+            }.resume()
         }
+        _ = semaphore.wait(timeout: .now() + 2)
 
-        // Fallback: shell 환경에서 python3 찾기 (GUI 앱은 ~/.zshrc 안 읽음)
-        let shell = Process()
-        shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        shell.arguments = ["-lc", "which python3"]
-        let pipe = Pipe()
-        shell.standardOutput = pipe
-        shell.standardError = FileHandle.nullDevice
-        do {
-            try shell.run()
-            shell.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let path = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !path.isEmpty,
-               FileManager.default.isExecutableFile(atPath: path) {
-                resolvedPython = path
-                print("✅ Python 발견 (shell): \(path)")
-                return
-            }
-        } catch {}
-        print("⚠️ Python을 찾을 수 없음 — 대시보드 서버 미실행")
-    }
-
-    /// 서버가 실행 중인지 확인하고, 없으면 시작
-    func ensureServerRunning() {
-        if checkServerRunning() { return }
-
-        guard let python = resolvedPython else {
-            DispatchQueue.main.async {
-                self.statusMenuItem.title = "○ Python 없음"
-            }
+        if serverAlreadyRunning {
+            print("서버 이미 실행 중, 생략")
             return
         }
 
-        startServerProcess(python: python)
-        // 서버가 뜰 때까지 대기
-        for _ in 0..<Config.serverStartRetries {
-            Thread.sleep(forTimeInterval: Config.serverRetryDelay)
-            if checkServerRunning() {
-                DispatchQueue.main.async {
-                    self.serverOK = true
-                    self.statusMenuItem.title = "● 실행중"
-                    self.updateTimeDisplay()
-                }
-                print("✅ 서버 시작 완료")
-                return
-            }
-        }
-        print("❌ 서버 시작 실패 (\(Config.serverStartRetries)회 시도)")
-    }
-
-    /// 단순 HTTP GET으로 서버 상태 확인
-    func checkServerRunning() -> Bool {
-        let semaphore = DispatchSemaphore(value: 0)
-        var running = false
-        guard let url = URL(string: "\(Config.serverURL)/api/today") else { return false }
-        URLSession.shared.dataTask(with: url) { data, resp, error in
-            if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 {
-                running = true
-            }
-            semaphore.signal()
-        }.resume()
-        _ = semaphore.wait(timeout: .now() + 3)
-        return running
-    }
-
-    /// 서버 프로세스 실행 (dashboard/api.py)
-    func startServerProcess(python: String) {
+        // 새 서버 실행
         stopServer()
-        serverStarting = true
-
         let logPath = scriptDir + "/logs/api.log"
         let apiPath = scriptDir + "/dashboard/api.py"
-        let dbDir = (scriptDir as NSString).appendingPathComponent(".mactimetracker")
 
         try? FileManager.default.createDirectory(atPath: scriptDir + "/logs",
             withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(atPath: dbDir,
-            withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: logPath, contents: nil)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: python)
-        process.arguments = [apiPath]
-        process.currentDirectoryURL = URL(fileURLWithPath: scriptDir)
+        // Hermes venv Python 우선 (fastapi+uvicorn 설치됨)
+        let candidates = ["/Users/JSK/hermes-agent/venv/bin/python3",
+            "/opt/homebrew/bin/python3", "python3"]
 
-        if let handle = FileHandle(forWritingAtPath: logPath) {
-            process.standardOutput = handle
-            process.standardError = handle
+        for python in candidates {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: python)
+            process.arguments = [apiPath]
+            process.currentDirectoryURL = URL(fileURLWithPath: scriptDir)
+            if let handle = FileHandle(forWritingAtPath: logPath) {
+                process.standardOutput = handle
+                process.standardError = handle
+            }
+            do {
+                try process.run()
+                Thread.sleep(forTimeInterval: 1.5)
+                if process.isRunning {
+                    serverProcess = process
+                    print("서버 시작됨 (Python: \(python), PID: \(process.processIdentifier))")
+                    return
+                }
+            } catch {
+                continue
+            }
         }
-
-        // PATH 환경변수 설정 (dashboard.py가 pip 패키지 찾게)
-        var env = ProcessInfo.processInfo.environment
-        env["PYTHONPATH"] = scriptDir + "/dashboard"
-        process.environment = env
-
-        do {
-            try process.run()
-            serverProcess = process
-            print("서버 시작 시도 (Python: \(python), PID: \(process.processIdentifier))")
-        } catch {
-            print("서버 시작 실패: \(error.localizedDescription)")
-        }
-        serverStarting = false
+        print("서버 시작 실패: 모든 Python 경로 실패")
     }
 
     func stopServer() {
@@ -319,13 +230,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             repeats: true) { [weak self] _ in self?.checkServer() }
         Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
             self?.checkServer()
-        }
-        // 서버가 아직 안 떴으면 10초 후 재시도
-        Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { [weak self] _ in
-            guard let self = self, !self.serverOK else { return }
-            DispatchQueue.global(qos: .userInitiated).async {
-                self.ensureServerRunning()
-            }
         }
     }
 
@@ -421,27 +325,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.serverOK = false
                     self.statusMenuItem.title = "○ 서버 연결 끊김"
                     self.timeMenuItem.title = "⏱ 오늘: — (서버 꺼짐)"
-                    // 서버가 죽었으면 다시 시작 시도 (background)
-                    if !self.serverStarting {
-                        DispatchQueue.global(qos: .userInitiated).async {
-                            self.ensureServerRunning()
-                        }
-                    }
-                }
-            }
-        }.resume()
-    }
-
-    func updateTimeDisplay() {
-        guard let url = URL(string: "\(Config.serverURL)/api/today") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, resp, error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                if let data = data,
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let total = json["total_seconds"] as? Double {
-                    self.totalTodaySeconds = total
-                    self.timeMenuItem.title = "⏱ 오늘: \(self.formatTime(total))"
                 }
             }
         }.resume()
@@ -489,3 +372,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return "\(m)m \(String(format: "%02d", sec))s"
     }
 }
+
+// MARK: - Entry Point
+
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()

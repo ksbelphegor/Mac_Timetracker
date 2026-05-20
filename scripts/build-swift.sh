@@ -23,9 +23,7 @@ swiftc watcher/tray.swift \
     -o "$MACOS/MacTT" \
     -framework Cocoa \
     -framework Foundation \
-    -parse-as-library \
-    -O \
-    -whole-module-optimization 2>&1
+    -O 2>&1
 
 echo "   ✅ 컴파일 완료"
 

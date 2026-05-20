@@ -8,7 +8,7 @@ enum Config {
     static let serverURL = "http://localhost:8000"
     static let heartbeatInterval: TimeInterval = 5
     static let statsRefreshInterval: TimeInterval = 60
-    static let windowTitleCacheTTL: TimeInterval = 2
+    static let windowTitleCacheTTL: TimeInterval = 5
 
     static let browserScripts: [String: String] = [
         "Brave Browser": "tell application \"Brave Browser\" to get title of active tab of window 1",
@@ -41,7 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var windowTitleTime: Date = .distantPast
     var serverOK = false
 
-    // Menu items
+    // Menu items — force unwrap because setupMenu() runs before use
     var appMenuItem: NSMenuItem!
     var timeMenuItem: NSMenuItem!
     var statusMenuItem: NSMenuItem!
@@ -56,6 +56,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // AX dialog
     var axPromptShown = false
+
+    // HTTP session (no cache for heartbeats)
+    private lazy var httpSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 10
+        return URLSession(configuration: config)
+    }()
+
+    // MARK: - Deinit
+
+    deinit {
+        heartbeatTimer?.invalidate()
+        statsTimer?.invalidate()
+        if let obs = notificationObserver {
+            workspace.notificationCenter.removeObserver(obs)
+        }
+        if let obs = axObserver {
+            workspace.notificationCenter.removeObserver(obs)
+        }
+    }
 
     // MARK: - Lifecycle
 
@@ -90,8 +110,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu
 
+    let menu = NSMenu()
+
     func setupMenu() {
-        menu = NSMenu()
+        menu.removeAllItems()
 
         appMenuItem = NSMenuItem(title: "📌 현재 앱: \(currentApp)", action: nil, keyEquivalent: "")
         appMenuItem.isEnabled = false
@@ -115,8 +137,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "✕ 종료", action: #selector(quitApp), keyEquivalent: "q"))
     }
 
-    var menu: NSMenu!
-
     @objc func toggleMenu(_ sender: Any?) {
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
@@ -126,15 +146,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Server
 
     func startServer() {
-        try? "startServer() called at \(Date())\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else {
-                try? "startServer: self is nil!\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
-                return
-            }
+            guard let self = self else { return }
             // Port 8000 충돌 체크
             let inUse = self.isPortInUse(8000)
-            try? "Port 8000 in use: \(inUse)\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
             if inUse {
                 print("서버 이미 실행 중 (port 8000)")
                 DispatchQueue.main.async {
@@ -144,16 +159,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             let server = HTTPServer(port: 8000)
-            try? "Starting server...\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
             server.start()
             self.httpServer = server
-            try? "Server started, waiting 0.3s...\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
             Thread.sleep(forTimeInterval: 0.3)
             DispatchQueue.main.async {
                 self.serverOK = true
                 self.statusMenuItem.title = "● 실행중"
                 print("HTTP 서버 시작됨 (port 8000)")
-                try? "HTTP server running on :8000\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
             }
         }
     }
@@ -386,10 +398,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
 
-        URLSession.shared.dataTask(with: req) { data, resp, error in
-            if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 {
-                DispatchQueue.main.async { [weak self] in
+        httpSession.dataTask(with: req) { data, resp, error in
+            DispatchQueue.main.async { [weak self] in
+                if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 {
                     self?.serverOK = true
+                } else if let error = error {
+                    print("heartbeat 실패: \(error.localizedDescription)")
                 }
             }
         }.resume()
@@ -397,7 +411,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func checkServer() {
         guard let url = URL(string: "\(Config.serverURL)/api/today") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, resp, error in
+        httpSession.dataTask(with: url) { [weak self] data, resp, error in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200,

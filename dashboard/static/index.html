@@ -323,6 +323,7 @@ async function loadHome() {
   } catch(e) {
     document.getElementById('status-badge').innerHTML =
       `<span class="status-dot status-off"></span>연결 오류`;
+    console.error('loadHome:', e);
   }
 }
 
@@ -350,18 +351,20 @@ async function loadHomeSessions(name) {
     const data = await res.json();
     const listEl = document.getElementById('home-sessions');
     let total = 0;
-    listEl.innerHTML = data.sessions.map(s => {
-      total += s.duration;
-      return `<div class="session-item">
+        // 최신 세션이 위로 오도록 역순, 최대 20개
+        const reversed = [...data.sessions].reverse().slice(0, 20);
+        listEl.innerHTML = reversed.map(s => {
+            total += s.duration;
+            return `<div class="session-item">
         <span class="session-body">
           <div class="session-title">📄 ${esc(s.title)}</div>
           <div class="session-time">${fmtTime(s.start)} ~ ${fmtTime(s.end)}</div>
         </span>
         <span class="session-dur">${fmtDur(s.duration)}</span>
       </div>`;
-    }).join('');
+        }).join('');
     document.getElementById('home-total-time').textContent = fmt(total);
-  } catch(e) {}
+  } catch(e) { console.error('loadHomeSessions:', e); }
 }
 
 /* ═══════════ 브라우저 탭 ═══════════ */
@@ -469,6 +472,7 @@ async function loadBrowserSessions() {
     }
   } catch(e) {
     statusEl.textContent = '로딩 실패';
+    console.error('loadBrowserSessions:', e);
   }
 }
 

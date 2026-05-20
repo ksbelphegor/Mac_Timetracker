@@ -288,7 +288,7 @@ class HTTPServer {
         return .json(200, [
             "app": data["app"] as Any,
             "title": data["title"] as Any,
-            "since": last["timestamp"]
+            "since": last["timestamp"] as Any
         ])
     }
 

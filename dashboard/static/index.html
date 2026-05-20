@@ -358,7 +358,7 @@ function switchTab(name) {
 
 /* ═══════════ 홈 탭 ═══════════ */
 let homeSelected = null;
-let sgSortBy = 'duration';
+let sgSortBy = 'end';
 let sgSortDir = 'desc';
 let expandedTitles = new Set();
 
@@ -512,7 +512,7 @@ async function loadHomeSessions(name) {
             <span class="ih-dur">활성화</span>
             <span class="ih-empty"></span>
           </div>
-          ${g.sessions.map(s => {
+          ${g.sessions.sort((a, b) => b.end - a.end).map(s => {
             const sDurSec = Math.round(s.duration);
             const sDurStr = sDurSec >= 60 ? `${Math.floor(sDurSec/60)}분 ${sDurSec%60}초` : `${sDurSec}초`;
             return `<div class="sg-item">

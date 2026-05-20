@@ -5,13 +5,12 @@ ActivityWatch 호환 heartbeat 수신 API + 통계/대시보드 엔드포인트
 """
 import json
 import os
-from datetime import date, timedelta
+from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import Response
 from pydantic import BaseModel
 
 from database import (
@@ -20,7 +19,15 @@ from database import (
     get_app_sessions, get_browser_sessions,
 )
 
-app = FastAPI(title="Mac Time Tracker", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    ensure_bucket(BUCKET_ID)
+    yield
+
+
+app = FastAPI(title="Mac Time Tracker", version="1.0.0", lifespan=lifespan)
 
 # 정적 파일 (대시보드)
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -29,12 +36,6 @@ if os.path.exists(STATIC_DIR):
 
 # ActivityWatch 호환 버킷 ID
 BUCKET_ID = "aw-watcher-window"
-
-
-@app.on_event("startup")
-def on_startup():
-    init_db()
-    ensure_bucket(BUCKET_ID)
 
 
 # ───── ActivityWatch 호환 API ─────
@@ -67,7 +68,7 @@ def post_simple_heartbeat(payload: HeartbeatPayload):
 # ───── 통계 API ─────
 
 @app.get("/api/today")
-def api_today(target_date: str = None):
+def api_today(target_date: Optional[str] = None):
     """오늘(또는 특정일) 앱별 통계 + 마지막 창 제목"""
     events = get_today_events(BUCKET_ID, target_date)
     apps = {}
@@ -78,7 +79,7 @@ def api_today(target_date: str = None):
         app = data.get("app", "Unknown")
         title = data.get("title", "")
         dur = e["duration"]
-        app_titles[app] = title  # 매번 덮어쓰기 → 마지막 이벤트 제목 유지
+        app_titles[app] = title
         apps[app] = apps.get(app, 0) + dur
         total += dur
 
@@ -119,7 +120,7 @@ def api_now():
 
 
 @app.get("/api/summary")
-def api_summary(start: str = None, end: str = None):
+def api_summary(start: Optional[str] = None, end: Optional[str] = None):
     """앱별 통계 요약"""
     rows = get_app_summary(BUCKET_ID, start, end)
     return {"rows": rows}
@@ -143,13 +144,13 @@ def api_recent(limit: int = 20):
 
 
 @app.get("/api/hourly")
-def api_hourly(target_date: str = None):
+def api_hourly(target_date: Optional[str] = None):
     """시간대별 앱 내역"""
     return get_hourly_breakdown(BUCKET_ID, target_date)
 
 
 @app.get("/api/sessions/{app_name}")
-def api_sessions(app_name: str, target_date: str = None):
+def api_sessions(app_name: str, target_date: Optional[str] = None):
     """특정 앱의 창 제목별 세션 목록"""
     sessions = get_app_sessions(BUCKET_ID, app_name, target_date)
     result = []
@@ -160,17 +161,14 @@ def api_sessions(app_name: str, target_date: str = None):
             "end": s["end"],
             "duration": s["duration"],
         })
-    result.reverse()  # 최신순
+    result.reverse()
     return {"app": app_name, "sessions": result}
 
 
 @app.get("/api/browser-sessions")
-def api_browser_sessions(target_date: str = None):
+def api_browser_sessions(target_date: Optional[str] = None):
     """모든 브라우저의 탭 세션"""
     sessions = get_browser_sessions(BUCKET_ID, target_date)
-    for s in sessions:
-        s["start"] = s["start"]
-        s["end"] = s["end"]
     sessions.reverse()
     return {"sessions": sessions}
 
@@ -193,5 +191,7 @@ def dashboard():
 
 
 if __name__ == "__main__":
+    import sys
     import uvicorn
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+    reload_flag = "--reload" in sys.argv
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=reload_flag)

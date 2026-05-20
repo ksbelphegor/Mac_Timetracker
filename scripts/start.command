@@ -100,5 +100,7 @@ echo ""
 echo "  종료: 메뉴바 ⏱ → ✕ 종료"
 echo "        또는 scripts/stop.command"
 echo ""
+echo "  개발: python3 dashboard/api.py --reload  (핫리로드)"
+echo ""
 
 read -p "엔터를 누르면 창이 닫힙니다..."

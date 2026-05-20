@@ -3,40 +3,25 @@
 Mac Time Tracker — macOS 메뉴바 앱
 
 rumps 기반 메뉴바 트레이 아이콘.
-watch_bridge.py를 대체하며 상태바 아이콘 + 실시간 상태 표시 + 조작 기능 제공.
+ActiveApp 알림 구독 → heartbeat 전송 → 창 제목 수집
 
 pip 필요: pip3 install rumps pyobjc-framework-Cocoa requests
 """
-
-import sys
 import os
 import time
-import json
-import subprocess
 import threading
 import logging
 import webbrowser
-from datetime import datetime
 
 import rumps
 import objc
 import requests
-from AppKit import (
-    NSWorkspace,
-    NSWorkspaceDidActivateApplicationNotification,
-    NSWorkspaceDidDeactivateApplicationNotification,
-)
-from Foundation import (
-    NSNotificationCenter,
-    NSObject,
-    NSRunLoop,
-    NSDate,
-)
+from AppKit import NSWorkspace, NSWorkspaceDidActivateApplicationNotification
+from Foundation import NSNotificationCenter, NSObject
 
 SERVER_URL = "http://localhost:8000"
-HEARTBEAT_INTERVAL = 5  # 초
-STATS_REFRESH_INTERVAL = 60  # 초
-WINDOW_TITLE_INTERVAL = 2  # 초
+HEARTBEAT_INTERVAL = 5
+STATS_REFRESH_INTERVAL = 60
 
 logger = logging.getLogger("mtt-tray")
 
@@ -65,15 +50,11 @@ class TimeTrackerTray(rumps.App):
     """메뉴바 트레이 앱"""
 
     def __init__(self):
-        # 메뉴바 아이콘
         icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
         super().__init__("MacTT", icon=icon_path if os.path.exists(icon_path) else None)
-        # 텍스트 없이 아이콘만 표시
         self.title = ""
 
         self.server_url = SERVER_URL
-
-        # 상태
         self.current_app = "—"
         self.current_pid = 0
         self.session_start = time.time()
@@ -84,13 +65,13 @@ class TimeTrackerTray(rumps.App):
         # 창 제목 캐시
         self._window_title = ""
         self._window_title_time = 0
-        self._window_title_cache_ttl = 2  # 2초 캐시
+        self._window_title_cache_ttl = 2
 
         # 메뉴 구성
         self.app_item = rumps.MenuItem(f"📌 현재 앱: {self.current_app}")
-        self.app_item.set_callback(None)  # 비활성 (표시 전용)
+        self.app_item.set_callback(None)
 
-        self.time_item = rumps.MenuItem(f"⏱ 오늘: 계산중...")
+        self.time_item = rumps.MenuItem("⏱ 오늘: 계산중...")
         self.time_item.set_callback(None)
 
         self.status_item = rumps.MenuItem("● 실행중")
@@ -104,7 +85,7 @@ class TimeTrackerTray(rumps.App):
             self.app_item,
             self.time_item,
             self.status_item,
-            None,  # separator
+            None,
             self.pause_item,
             self.dashboard_item,
             None,
@@ -112,18 +93,16 @@ class TimeTrackerTray(rumps.App):
         ]
 
         # NSWorkspace 알림 구독
+        self.nc = NSNotificationCenter.defaultCenter()
         self.delegate = WatcherDelegate.alloc().initWithTray_(self)
-        NC = NSNotificationCenter.defaultCenter()
-        NC.addObserver_selector_name_object_(
+        self.nc.addObserver_selector_name_object_(
             self.delegate,
-            objc.selector(
-                self.delegate.activeAppDidChange_, signature=b"v@:@"
-            ),
+            objc.selector(self.delegate.activeAppDidChange_, signature=b"v@:@"),
             NSWorkspaceDidActivateApplicationNotification,
             None,
         )
 
-        # 현재 앱 초기값 설정
+        # 현재 앱 초기값
         try:
             ws = NSWorkspace.sharedWorkspace()
             active = ws.activeApplication()
@@ -134,34 +113,25 @@ class TimeTrackerTray(rumps.App):
         except Exception:
             pass
 
-        # 서버 헬스체크
         self.check_server()
 
-        # 5초 heartbeat 타이머 (rumps 자체 타이머)
         self.heartbeat_timer = rumps.Timer(self.on_heartbeat, HEARTBEAT_INTERVAL)
         self.heartbeat_timer.start()
 
-        # 60초 통계 갱신 타이머
         self.stats_timer = rumps.Timer(self.refresh_stats, STATS_REFRESH_INTERVAL)
         self.stats_timer.start()
 
-        # 첫 통계는 3초 후에 fetch
         threading.Timer(3.0, self.refresh_stats, args=[None]).start()
 
-    # ── 알림 핸들러 ──────────────────────────────────
+    # ── 알림 핸들러 ──
 
     def on_app_changed(self, app_name, pid):
         """앱 전환 시 호출"""
         if self.paused:
             return
-
         now = time.time()
         duration = now - self.session_start
-
-        # heartbeat 전송
         self._send_heartbeat(app_name, now, duration)
-
-        # UI 업데이트
         self.current_app = app_name
         self.current_pid = pid
         self.session_start = now
@@ -169,7 +139,7 @@ class TimeTrackerTray(rumps.App):
         self._update_tooltip()
 
     def on_heartbeat(self, _sender=None):
-        """5초 주기 heartbeat (앱 전환이 없어도 살아있는 신호)"""
+        """5초 주기 heartbeat"""
         if self.paused:
             return
         try:
@@ -181,7 +151,6 @@ class TimeTrackerTray(rumps.App):
                 duration = now - self.session_start
                 self._send_heartbeat(app_name, now, duration)
                 self.session_start = now
-
                 if app_name != self.current_app:
                     self.current_app = app_name
                     self.app_item.title = f"📌 현재 앱: {app_name}"
@@ -189,7 +158,7 @@ class TimeTrackerTray(rumps.App):
         except Exception as e:
             logger.debug(f"heartbeat 오류: {e}")
 
-    # ── 창 제목 ──────────────────────────────────────
+    # ── 창 제목 ──
 
     def _get_window_title(self):
         """현재 활성 창/탭 제목 가져오기 (브라우저 대응)"""
@@ -197,15 +166,10 @@ class TimeTrackerTray(rumps.App):
         if now - self._window_title_time < self._window_title_cache_ttl:
             return self._window_title
 
-        # 1) 현재 포그라운드 앱 이름
         app_name = self._get_frontmost_app()
-
-        # 2) 브라우저면 브라우저 자체 스크립트로 탭 제목
         title = None
         if app_name in self.BROWSER_SCRIPTS:
             title = self._browser_tab_title(app_name)
-
-        # 3) 일반 앱이면 Accessibility API
         if not title:
             title = self._ax_window_title(app_name)
 
@@ -228,6 +192,7 @@ class TimeTrackerTray(rumps.App):
     def _get_frontmost_app(self):
         """현재 포그라운드 앱 이름 반환"""
         try:
+            import subprocess
             result = subprocess.run(
                 ["osascript", "-e",
                  'tell application "System Events" to get name of first process whose frontmost is true'],
@@ -245,6 +210,7 @@ class TimeTrackerTray(rumps.App):
         if not script:
             return ""
         try:
+            import subprocess
             result = subprocess.run(
                 ["osascript", "-e", script],
                 capture_output=True, text=True, timeout=3
@@ -260,8 +226,9 @@ class TimeTrackerTray(rumps.App):
         if not app_name:
             return ""
         try:
+            import subprocess
             result = subprocess.run(
-                ["osascript", "-e", 
+                ["osascript", "-e",
                  f'tell application "System Events" to tell process "{app_name}" to get title of window 1'],
                 capture_output=True, text=True, timeout=3
             )
@@ -271,7 +238,7 @@ class TimeTrackerTray(rumps.App):
             pass
         return ""
 
-    # ── 서버 통신 ────────────────────────────────────
+    # ── 서버 통신 ──
 
     def _send_heartbeat(self, app_name, timestamp, duration):
         """서버로 heartbeat 전송 (앱명 + 창 제목)"""
@@ -310,13 +277,13 @@ class TimeTrackerTray(rumps.App):
         except Exception:
             self.server_ok = False
             self.status_item.title = "○ 서버 연결 끊김"
-            self.time_item.title = f"⏱ 오늘: — (서버 꺼짐)"
+            self.time_item.title = "⏱ 오늘: — (서버 꺼짐)"
 
     def refresh_stats(self, _sender=None):
         """서버에서 오늘 통계 갱신"""
         self.check_server()
 
-    # ── 메뉴 액션 ────────────────────────────────────
+    # ── 메뉴 액션 ──
 
     def toggle_pause(self, _sender):
         """일시정지 토글"""
@@ -330,7 +297,6 @@ class TimeTrackerTray(rumps.App):
             self.status_item.title = "● 실행중"
             self.session_start = time.time()
             self.app_item.title = f"📌 현재 앱: {self.current_app}"
-            # 재개 즉시 heartbeat
             self.on_heartbeat()
 
     def open_dashboard(self, _sender):
@@ -343,16 +309,23 @@ class TimeTrackerTray(rumps.App):
         )
 
     def quit_app(self, _sender):
-        """앱 종료 (API 서버도 함께 종료)"""
-        # PID 파일로 API 서버 종료
+        """앱 종료 (API 서버도 함께 종료 + observer 정리)"""
+        # NSNotificationCenter observer 해제 (메모리 누수 방지)
+        try:
+            self.nc.removeObserver_(self.delegate)
+        except Exception:
+            pass
+
+        # API 서버 종료
         script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         pid_path = os.path.join(script_dir, "logs", "api.pid")
         try:
             with open(pid_path) as f:
                 pid = int(f.read().strip())
-                os.kill(pid, 15)  # SIGTERM
+                os.kill(pid, 15)
         except Exception:
-            pass  # 이미 종료됨 또는 PID 파일 없음
+            pass
+
         rumps.notification(
             "Mac Time Tracker",
             "트래커 종료",
@@ -360,16 +333,16 @@ class TimeTrackerTray(rumps.App):
         )
         rumps.quit_application()
 
-    # ── 유틸 ─────────────────────────────────────────
+    # ── 유틸 ──
 
-    def _format_time(self, seconds):
+    @staticmethod
+    def _format_time(seconds):
         """초 → hh:mm:ss 변환"""
         h, remainder = divmod(int(seconds), 3600)
         m, s = divmod(remainder, 60)
         if h > 0:
             return f"{h}h {m:02d}m"
-        else:
-            return f"{m}m {s:02d}s"
+        return f"{m}m {s:02d}s"
 
     def _update_tooltip(self):
         """메뉴바 — 텍스트 없이 아이콘만"""
@@ -381,7 +354,6 @@ def main():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
-
     logger.info("🕐 Mac Time Tracker 메뉴바 앱 시작")
     logger.info(f"   서버: {SERVER_URL}")
     logger.info("   메뉴바에서 ⏱ 아이콘을 찾아보세요")

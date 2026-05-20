@@ -53,6 +53,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Server process
     var serverProcess: Process?
 
+    // AX dialog
+    var axPromptShown = false
+
     var scriptDir: String {
         let bin = (#file as NSString).deletingLastPathComponent
         return (bin as NSString).deletingLastPathComponent  // watcher/ -> project root
@@ -184,12 +187,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func checkAccessibilityPermission() {
         if AXIsProcessTrusted() {
-            print("✅ AX 권한 있음")
+            print("✅ AX 권한 있음 (직접 AX API 사용)")
             return
         }
-        print("⚠️ AX 권한 없음 — 다이얼로그 표시")
+
+        // osascript subprocess가 가능한지 확인
+        let osaWorks = runViaOSA("tell application \"System Events\" to get name of every process")
+        if !osaWorks.isEmpty {
+            print("✅ AX 권한 없지만 osascript fallback 사용 가능")
+            return
+        }
+
+        print("⚠️ AX 권한 없음 — 다이얼로그 표시 (1회만)")
         DispatchQueue.main.async { [weak self] in
-            self?.showAccessibilityPrompt()
+            guard let self = self, !self.axPromptShown else { return }
+            self.axPromptShown = true
+            self.showAccessibilityPrompt()
         }
     }
 
@@ -295,13 +308,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return ""
         }
 
-        // 1. 브라우저는 AppleScript 우선 (직접 통신, AX 불필요)
+        // 1. 브라우저 AppleScript (osascript subprocess)
         if let script = Config.browserScripts[name] {
-            title = runAppleScript(script)
+            title = runViaOSA(script)
         }
 
-        // 2. AX API로 직접 창 제목 가져오기 (모든 앱)
+        // 2. System Events (osascript subprocess, 모든 앱)
         if title.isEmpty {
+            title = runViaOSA(
+                "tell application \"System Events\" to tell process \"\(name)\" to get title of window 1")
+        }
+
+        // 3. AX API 직접 (MacTT에 AX 권한 있을 때만)
+        if title.isEmpty && AXIsProcessTrusted() {
             title = axWindowTitle(pid: app.processIdentifier)
         }
 
@@ -316,19 +335,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return name
     }
 
-    func runAppleScript(_ script: String) -> String {
-        guard let scriptObj = NSAppleScript(source: script) else { return "" }
-        var error: NSDictionary?
-        let result = scriptObj.executeAndReturnError(&error)
-        if error == nil, let str = result.stringValue {
-            return str.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// osascript subprocess로 AppleScript 실행 (시스템 TCC trust 활용)
+    func runViaOSA(_ script: String) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus != 0 {
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                if let errStr = String(data: errData, encoding: .utf8), !errStr.isEmpty {
+                    print("osascript err: \(errStr)")
+                }
+                return ""
+            }
+            let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+            return String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        } catch {
+            return ""
         }
-        return ""
     }
 
     func axWindowTitle(pid: pid_t) -> String {
         let appRef = AXUIElementCreateApplication(pid)
-        // focused window → title
         var focused: CFTypeRef?
         let focusResult = AXUIElementCopyAttributeValue(
             appRef, kAXFocusedWindowAttribute as CFString, &focused)
@@ -348,14 +383,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let title = getWindowTitle()
         let axTrusted = AXIsProcessTrusted()
         let finalTitle = title.isEmpty ? app : title
+        let titleSource: String = {
+            if title.isEmpty { return "fallback_app" }
+            // osascript subprocess에서 왔는지 AX API에서 왔는지는 여기서 알 수 없지만
+            // 디버깅용으로 간략 표시
+            return axTrusted ? "ax_api" : "osascript"
+        }()
         let body: [String: Any] = [
             "timestamp": timestamp.timeIntervalSince1970,
             "duration": max(duration, 1.0),
             "data": [
                 "app": app,
                 "title": finalTitle,
-                "_title_src": title.isEmpty ? "fallback(app)" : "ax_api",
-                "_ax_trusted": axTrusted
+                "_src": titleSource,
+                "_ax": axTrusted
             ]
         ]
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body),

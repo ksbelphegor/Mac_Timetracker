@@ -484,7 +484,7 @@ async function loadHomeSessions(name) {
 
     listEl.innerHTML = `
       <div class="sg-list-header">
-        <span class="lh-title lh-btn ${sgSortBy==='title'?'active':''}" onclick="sortSG('title')">페이지${sortArrow('title')}</span>
+        <span class="lh-title lh-btn ${sgSortBy==='title'?'active':''}" onclick="sortSG('title')">사이트${sortArrow('title')}</span>
         <span class="lh-start lh-btn ${sgSortBy==='start'?'active':''}" onclick="sortSG('start')">시작${sortArrow('start')}</span>
         <span class="lh-end lh-btn ${sgSortBy==='end'?'active':''}" onclick="sortSG('end')">종료${sortArrow('end')}</span>
         <span class="lh-dur lh-btn ${sgSortBy==='duration'?'active':''}" onclick="sortSG('duration')">활성화${sortArrow('duration')}</span>

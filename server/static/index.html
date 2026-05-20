@@ -272,6 +272,10 @@ function selectHomeApp(name) {
   document.getElementById('home-content').style.display = 'flex';
   document.getElementById('home-empty').style.display = 'none';
   document.getElementById('home-app-name').textContent = name;
+  // 클릭 즉시 active 클래스 적용
+  document.querySelectorAll('#home-app-list .app-item').forEach(el => {
+    el.classList.toggle('active', el.textContent.trim().startsWith(name));
+  });
   loadHomeSessions(name);
 }
 

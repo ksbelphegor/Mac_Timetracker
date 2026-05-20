@@ -91,7 +91,7 @@
   .app-item:hover { background:#21262d; }
   .app-item.active { background:#1f6feb22; border:1px solid #1f6feb44; }
   .app-item-name { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .app-item-time { font-size:13px; font-weight:bold; color:#3fb950; margin-left:8px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .app-item-time { font-size:13px; font-weight:bold; color:#3fb950; margin-left:8px; white-space:nowrap; font-variant-numeric:tabular-nums; transition:color 0.3s; }
   .app-icon-img { width:18px; height:18px; border-radius:4px; flex-shrink:0; }
   /* ── 브라우저 탭 ── */
   .browser-search { margin-bottom:10px; }
@@ -330,18 +330,40 @@ async function loadHome() {
     document.getElementById('status-badge').innerHTML =
       `<span class="status-dot status-on"></span>연결됨`;
 
-    // 앱 목록 (아이콘 포함)
     const listEl = document.getElementById('home-app-list');
-    listEl.innerHTML = data.apps.map(a =>
-      `<div class="app-item ${homeSelected === a.name ? 'active' : ''}"
-           onclick="selectHomeApp('${escAttr(a.name)}')">
-        <img class="app-icon-img" src="/api/app-icon/${encodeURIComponent(a.name)}"
-             alt="" loading="lazy"
-             onerror="this.style.display='none'">
-        <span class="app-item-name">${esc(a.name)}</span>
-        <span class="app-item-time">${fmt(a.seconds)}</span>
-      </div>`
-    ).join('');
+    const existing = listEl.children;
+
+    // 구조가 같으면 DOM 갈아엎지 않고 시간만 업데이트 (깜빡임 방지)
+    let same = existing.length === data.apps.length;
+    if (same) {
+      for (let i = 0; i < data.apps.length; i++) {
+        const nameEl = existing[i]?.querySelector('.app-item-name');
+        if (!nameEl || nameEl.textContent !== data.apps[i].name) {
+          same = false;
+          break;
+        }
+      }
+    }
+
+    if (same) {
+      for (let i = 0; i < data.apps.length; i++) {
+        const a = data.apps[i];
+        const item = existing[i];
+        item.querySelector('.app-item-time').textContent = fmt(a.seconds);
+        item.classList.toggle('active', homeSelected === a.name);
+      }
+    } else {
+      listEl.innerHTML = data.apps.map(a =>
+        `<div class="app-item ${homeSelected === a.name ? 'active' : ''}"
+             onclick="selectHomeApp('${escAttr(a.name)}')">
+          <img class="app-icon-img" src="/api/app-icon/${encodeURIComponent(a.name)}"
+               alt="" loading="lazy"
+               onerror="this.style.display='none'">
+          <span class="app-item-name">${esc(a.name)}</span>
+          <span class="app-item-time">${fmt(a.seconds)}</span>
+        </div>`
+      ).join('');
+    }
 
     if (homeSelected) {
       const exists = data.apps.some(a => a.name === homeSelected);

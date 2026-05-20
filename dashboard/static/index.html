@@ -562,7 +562,12 @@ function extractSite(title, app) {
 }
 function extractDomain(url) {
   if (!url) return null;
-  try { return new URL(url).hostname.replace(/^www\./, ''); }
+  try {
+    let h = new URL(url).hostname;
+    // Remove www./m./mobile. prefixes for cleaner grouping
+    h = h.replace(/^(www|m|mobile)\./, '');
+    return h;
+  }
   catch(e) { return null; }
 }
 

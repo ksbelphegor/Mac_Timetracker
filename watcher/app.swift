@@ -11,15 +11,14 @@ enum Config {
     static let windowTitleCacheTTL: TimeInterval = 5
 
     static let browserScripts: [String: String] = [
-        "Brave Browser": "tell application \"Brave Browser\" to get title of active tab of window 1",
-        "Google Chrome": "tell application \"Google Chrome\" to get title of active tab of window 1",
-        "Safari": "tell application \"Safari\" to get name of front document",
-        "Firefox": "tell application \"System Events\" to tell process \"firefox\" to get title of window 1",
-        "Microsoft Edge": "tell application \"Microsoft Edge\" to get title of active tab of window 1",
-        "Arc": "tell application \"Arc\" to get title of active tab of window 1",
-        "Opera": "tell application \"Opera\" to get title of active tab of window 1",
-        "Opera GX": "tell application \"Opera GX\" to get title of active tab of window 1",
-        "Orion": "tell application \"Orion\" to get title of active tab of window 1",
+        "Brave Browser": "tell application \"Brave Browser\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "Google Chrome": "tell application \"Google Chrome\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "Safari": "tell application \"Safari\"\nset t to name of front document\nset u to URL of front document\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "Microsoft Edge": "tell application \"Microsoft Edge\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "Arc": "tell application \"Arc\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "Opera": "tell application \"Opera\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "Opera GX": "tell application \"Opera GX\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "Orion": "tell application \"Orion\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
     ]
 }
 
@@ -38,6 +37,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var paused = false
     var totalTodaySeconds: Double = 0
     var windowTitle = ""
+    var windowURL = ""
     var windowTitleTime: Date = .distantPast
     var serverOK = false
 
@@ -305,30 +305,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         var title = ""
+        var url = ""
         guard let app = workspace.frontmostApplication,
               let name = app.localizedName else {
             windowTitle = ""
+            windowURL = ""
             windowTitleTime = now
             return ""
         }
 
-        // 1. Browser AppleScript (osascript subprocess)
+        // 1. Browser AppleScript (osascript subprocess) — returns "title|TITLEURL|url"
         if let script = Config.browserScripts[name] {
-            title = runViaOSA(script)
+            let output = runViaOSA(script)
+            if let sepRange = output.range(of: "|TITLEURL|") {
+                title = String(output[output.startIndex..<sepRange.lowerBound])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                url = String(output[sepRange.upperBound...])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                title = output
+            }
         }
 
-        // 2. System Events (osascript subprocess, all apps)
+        // 2. Firefox needs special handling (no URL via AppleScript)
+        if title.isEmpty, name == "Firefox" {
+            title = runViaOSA("tell application \"System Events\" to tell process \"firefox\" to get title of window 1")
+        }
+
+        // 3. System Events (osascript subprocess, all apps)
         if title.isEmpty {
             title = runViaOSA(
                 "tell application \"System Events\" to tell process \"\(name)\" to get title of window 1")
         }
 
-        // 3. AX API (only if MacTT has direct AX trust)
+        // 4. AX API (only if MacTT has direct AX trust)
         if title.isEmpty && AXIsProcessTrusted() {
             title = axWindowTitle(pid: app.processIdentifier)
         }
 
         windowTitle = title
+        windowURL = url
         windowTitleTime = now
         return title
     }
@@ -385,10 +401,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func sendHeartbeat(app: String, timestamp: Date, duration: TimeInterval) {
         let title = getWindowTitle()
         let finalTitle = title.isEmpty ? app : title
+        var dataDict: [String: String] = ["app": app, "title": finalTitle]
+        if !windowURL.isEmpty {
+            dataDict["url"] = windowURL
+        }
         let body: [String: Any] = [
             "timestamp": timestamp.timeIntervalSince1970,
             "duration": max(duration, 1.0),
-            "data": ["app": app, "title": finalTitle]
+            "data": dataDict
         ]
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body),
               let url = URL(string: "\(Config.serverURL)/api/heartbeat") else { return }

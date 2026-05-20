@@ -217,6 +217,7 @@ class Database {
                   let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String] else { continue }
             let app = data["app"] ?? "Unknown"
             let title = data["title"] ?? app
+            let url = data["url"] ?? ""
             let ts = r["timestamp"] as? Double ?? 0
             let dur = r["duration"] as? Double ?? 0
 
@@ -238,7 +239,7 @@ class Database {
                 }
             }
             if let c = current { sessions.append(c) }
-            var newSession: [String: Any] = ["title": title, "start": ts, "end": ts + dur, "duration": dur]
+            var newSession: [String: Any] = ["title": title, "url": url, "start": ts, "end": ts + dur, "duration": dur]
             if browserOnly { newSession["app"] = app }
             current = newSession
         }

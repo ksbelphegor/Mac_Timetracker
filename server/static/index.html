@@ -282,7 +282,7 @@ function refreshAll() {
 
 function dateParam() {
   const today = new Date().toISOString().slice(0, 10);
-  return selectedDate !== today ? `&target_date=${selectedDate}` : '';
+  return selectedDate !== today ? `?target_date=${selectedDate}` : '';
 }
 
 /* ═══════════ 탭 전환 ═══════════ */

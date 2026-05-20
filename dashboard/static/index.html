@@ -250,6 +250,9 @@ function fmtTime(ts) {
 function esc(s) {
   const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
 }
+function escAttr(s) {
+  return esc(s).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+}
 
 /* ═══════════ 날짜 ═══════════ */
 function initDatePicker() {
@@ -306,7 +309,7 @@ async function loadHome() {
     const listEl = document.getElementById('home-app-list');
     listEl.innerHTML = data.apps.map(a =>
       `<div class="app-item ${homeSelected === a.name ? 'active' : ''}"
-           onclick="selectHomeApp('${esc(a.name)}')">
+           onclick="selectHomeApp('${escAttr(a.name)}')">
         <span class="app-item-name">${esc(a.name)}</span>
         <span class="app-item-time">${fmt(a.seconds)}</span>
       </div>`

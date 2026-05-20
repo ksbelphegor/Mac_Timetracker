@@ -37,6 +37,12 @@ if os.path.exists(STATIC_DIR):
 # ActivityWatch 호환 버킷 ID
 BUCKET_ID = "aw-watcher-window"
 
+# 트래킹 제외 시스템 프로세스
+SKIP_APPS = frozenset({
+    "loginwindow", "WindowServer", "SystemUIServer",
+    "Dock", "Spotlight", "NotificationCenter",
+})
+
 
 # ───── ActivityWatch 호환 API ─────
 
@@ -77,6 +83,8 @@ def api_today(target_date: Optional[str] = None):
     for e in events:
         data = json.loads(e["data"]) if isinstance(e["data"], str) else e["data"]
         app = data.get("app", "Unknown")
+        if app in SKIP_APPS:
+            continue
         title = data.get("title", "")
         dur = e["duration"]
         app_titles[app] = title
@@ -88,11 +96,15 @@ def api_today(target_date: Optional[str] = None):
     current_app_name = None
     current_title = None
     if events:
-        last_data = events[-1]["data"]
-        if isinstance(last_data, str):
-            last_data = json.loads(last_data)
-        current_app_name = last_data.get("app")
-        current_title = last_data.get("title", "")
+        for e in reversed(events):
+            last_data = e["data"]
+            if isinstance(last_data, str):
+                last_data = json.loads(last_data)
+            app = last_data.get("app", "")
+            if app not in SKIP_APPS:
+                current_app_name = app
+                current_title = last_data.get("title", "")
+                break
 
     return {
         "total_seconds": total,

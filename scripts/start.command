@@ -36,15 +36,51 @@ if [ "$NEED_BUILD" = true ]; then
     echo "✅ 빌드 완료 (115KB)"
 fi
 
-# ── 1. API 서버 확인 (Swift .app이 내부적으로 실행하지만, 대시보드 빠른 오픈을 위해 선실행) ──
+# ── 1. API 서버 직접 시작 ──
 
 echo ""
 echo "🚀 1. API 서버 확인 중..."
 if curl -s -o /dev/null http://localhost:8000/ 2>/dev/null; then
     echo "✅ 이미 실행 중"
 else
-    # Swift .app이 서버를 실행할 때까지 잠시 대기
-    echo "   Swift 앱이 서버를 시작합니다..."
+    echo "   서버 시작 중..."
+    # dashboard/ 디렉토리에서 실행 (상대 import 위해)
+    cd "$SCRIPT_DIR/dashboard"
+    mkdir -p "$SCRIPT_DIR/logs"
+
+    # Hermes venv Python 우선 (fastapi+uvicorn 설치됨)
+    PYTHON=""
+    for candidate in /Users/JSK/hermes-agent/venv/bin/python3 /opt/homebrew/bin/python3 python3; do
+        if $candidate -c "import fastapi, uvicorn" 2>/dev/null; then
+            PYTHON="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$PYTHON" ]; then
+        echo "❌ fastapi+uvicorn 설치된 Python 없음"
+        echo "   실행: pip install fastapi uvicorn"
+        read -p "엔터를 누르면 창이 닫힙니다..."
+        exit 1
+    fi
+
+    # 백그라운드 실행 (로그 저장)
+    nohup "$PYTHON" api.py > "$SCRIPT_DIR/logs/api.log" 2>&1 &
+    SERVER_PID=$!
+    echo "$SERVER_PID" > "$SCRIPT_DIR/logs/api.pid"
+    echo "   서버 PID: $SERVER_PID (Python: $PYTHON)"
+
+    # 서버 준비 대기
+    cd "$SCRIPT_DIR"
+    for i in {1..10}; do
+        sleep 1
+        curl -s -o /dev/null http://localhost:8000/ 2>/dev/null && break
+    done
+    if curl -s -o /dev/null http://localhost:8000/ 2>/dev/null; then
+        echo "✅ 서버 실행 중"
+    else
+        echo "⚠️ 서버 응답 없음 — 로그 확인: logs/api.log"
+    fi
 fi
 
 # ── 2. Swift 메뉴바 앱 실행 ──

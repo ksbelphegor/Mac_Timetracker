@@ -1,29 +1,34 @@
 # App data
 .mactimetracker/
 
-# Docker
-# IDE
-# Python
-# macOS
-# py2app build
+# Build artifacts
 legacy/build/
 legacy/dist/
+build/
+dist/
+
+# Python
 *$py.class
-*.app
 *.egg
 *.egg-info/
 *.py[cod]
 *.so
 *.swo
 *.swp
+.installed.cfg
+__pycache__/
+venv/
+
+# macOS
 .DS_Store
 ._*
-.env
+
+# IDE
 .idea/
-.installed.cfg
 .vscode/
-__pycache__/
-build/
-dist/
+
+# Env
+.env
+
+# App logs
 logs/
-venv/

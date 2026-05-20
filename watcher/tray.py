@@ -343,19 +343,20 @@ class TimeTrackerTray(rumps.App):
         )
 
     def quit_app(self, _sender):
-        """앱 종료 (Docker 서버도 함께 종료)"""
+        """앱 종료 (API 서버도 함께 종료)"""
+        # PID 파일로 API 서버 종료
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        pid_path = os.path.join(script_dir, "logs", "api.pid")
         try:
-            script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            subprocess.run(
-                ["docker", "compose", "down"],
-                cwd=script_dir, capture_output=True, timeout=10
-            )
+            with open(pid_path) as f:
+                pid = int(f.read().strip())
+                os.kill(pid, 15)  # SIGTERM
         except Exception:
-            pass
+            pass  # 이미 종료됨 또는 PID 파일 없음
         rumps.notification(
             "Mac Time Tracker",
             "트래커 종료",
-            "트래킹 및 Docker 서버가 종료되었습니다.",
+            "트래킹 및 API 서버가 종료되었습니다.",
         )
         rumps.quit_application()
 

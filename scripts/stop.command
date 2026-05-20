@@ -15,25 +15,37 @@ cd "$SCRIPT_DIR"
 echo ""
 echo "⏱ 1. 메뉴바 앱 종료 중..."
 
-# tray_app.py 프로세스 찾아서 종료
-PIDS=$(ps aux | grep "watcher/tray.py" | grep -v grep | awk '{print $2}')
-if [ -n "$PIDS" ]; then
-    kill $PIDS 2>/dev/null
-    echo "✅ 메뉴바 앱 종료됨"
+if [ -f logs/tray.pid ]; then
+    kill $(cat logs/tray.pid) 2>/dev/null && echo "✅ 메뉴바 앱 종료됨" || echo "ℹ️  이미 종료됨"
+    rm -f logs/tray.pid
 else
-    echo "ℹ️  실행 중인 메뉴바 앱이 없음"
+    # PID 파일 없으면 ps로 찾기
+    PIDS=$(ps aux | grep "watcher/tray.py" | grep -v grep | awk '{print $2}')
+    if [ -n "$PIDS" ]; then
+        kill $PIDS 2>/dev/null
+        echo "✅ 메뉴바 앱 종료됨"
+    else
+        echo "ℹ️  실행 중인 메뉴바 앱이 없음"
+    fi
 fi
 
-# ── 2. Docker 서버 종료 ──
+# ── 2. API 서버 종료 ──
 
 echo ""
-echo "🐳 2. Docker 서버 종료 중..."
+echo "🚀 2. API 서버 종료 중..."
 
-docker compose down 2>&1
-if [ $? -eq 0 ]; then
-    echo "✅ Docker 서버 종료됨"
+if [ -f logs/api.pid ]; then
+    kill $(cat logs/api.pid) 2>/dev/null && echo "✅ API 서버 종료됨" || echo "ℹ️  이미 종료됨"
+    rm -f logs/api.pid
 else
-    echo "ℹ️  Docker 서버 종료 완료 (또는 실행 중이지 않음)"
+    # PID 파일 없으면 ps로 찾기
+    PIDS=$(ps aux | grep "api.py" | grep -v grep | awk '{print $2}')
+    if [ -n "$PIDS" ]; then
+        kill $PIDS 2>/dev/null
+        echo "✅ API 서버 종료됨"
+    else
+        echo "ℹ️  실행 중인 API 서버가 없음"
+    fi
 fi
 
 echo ""

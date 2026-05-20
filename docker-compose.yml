@@ -1,8 +1,0 @@
-services:
-  tracker:
-    build: ./dashboard
-    ports:
-      - "8000:8000"
-    volumes:
-      - ~/.mactimetracker:/app/data
-    restart: unless-stopped

@@ -190,3 +190,8 @@ def dashboard():
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
         )
     return HTMLResponse("<h1>Dashboard not found</h1>")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

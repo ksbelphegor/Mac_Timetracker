@@ -62,7 +62,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.title = "⏱"
+            if #available(macOS 11.0, *) {
+                button.image = NSImage(systemSymbolName: "clock", accessibilityDescription: "Timer")
+            } else {
+                button.title = "⏱"
+            }
             button.action = #selector(toggleMenu)
         }
         setupMenu()
@@ -71,6 +75,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setCurrentApp()
         checkServer()
         startTimers()
+
+        // Accessibility 권한 체크 (1회)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.checkAccessibilityPermission()
+        }
     }
 
     // MARK: - Menu
@@ -164,6 +173,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         print("서버 시작 실패: 모든 Python 경로 실패")
+    }
+
+    func checkAccessibilityPermission() {
+        // 간단한 AX 체크: 권한이 없으면 사용자에게 설정 안내
+        let checkScript = """
+        tell application "System Events"
+            set appList to name of every process
+        end tell
+        """
+        guard let script = NSAppleScript(source: checkScript) else { return }
+        var error: NSDictionary?
+        _ = script.executeAndReturnError(&error)
+        if error != nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.showAccessibilityPrompt()
+            }
+        }
+    }
+
+    func showAccessibilityPrompt() {
+        let alert = NSAlert()
+        alert.messageText = "Mac Time Tracker"
+        alert.informativeText = "창 제목 추적을 위해 손쉬운 사용(Accessibility) 권한이 필요합니다.\n\n시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용 → Mac Time Tracker.app 추가"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "시스템 설정 열기")
+        alert.addButton(withTitle: "나중에")
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     func stopServer() {

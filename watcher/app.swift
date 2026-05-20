@@ -29,6 +29,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     let workspace = NSWorkspace.shared
     var notificationObserver: NSObjectProtocol?
+    var axObserver: NSObjectProtocol?
 
     // State
     var currentApp = "—"
@@ -50,16 +51,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var heartbeatTimer: Timer?
     var statsTimer: Timer?
 
-    // Server process
-    var serverProcess: Process?
+    // Server
+    var httpServer: HTTPServer?
 
     // AX dialog
     var axPromptShown = false
-
-    var scriptDir: String {
-        let bin = (#file as NSString).deletingLastPathComponent
-        return (bin as NSString).deletingLastPathComponent  // watcher/ -> project root
-    }
 
     // MARK: - Lifecycle
 
@@ -80,11 +76,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkServer()
         startTimers()
 
-        // Accessibility 권한 체크 + 변경 감지
+        // AX check
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.checkAccessibilityPermission()
         }
-        workspace.notificationCenter.addObserver(
+        axObserver = workspace.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
@@ -105,7 +101,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         timeMenuItem.isEnabled = false
         menu.addItem(timeMenuItem)
 
-        statusMenuItem = NSMenuItem(title: "● 실행중", action: nil, keyEquivalent: "")
+        statusMenuItem = NSMenuItem(title: "● 시작 중...", action: nil, keyEquivalent: "")
         statusMenuItem.isEnabled = false
         menu.addItem(statusMenuItem)
 
@@ -127,77 +123,80 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = nil
     }
 
-    // MARK: - Server Management
+    // MARK: - Server
 
     func startServer() {
-        // 이미 서버가 실행 중인지 확인
-        let semaphore = DispatchSemaphore(value: 0)
-        var serverAlreadyRunning = false
-        if let url = URL(string: "\(Config.serverURL)/api/today") {
-            URLSession.shared.dataTask(with: url) { data, resp, error in
-                if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 {
-                    serverAlreadyRunning = true
-                }
-                semaphore.signal()
-            }.resume()
-        }
-        _ = semaphore.wait(timeout: .now() + 2)
-
-        if serverAlreadyRunning {
-            print("서버 이미 실행 중, 생략")
-            return
-        }
-
-        // 새 서버 실행
-        stopServer()
-        let logPath = scriptDir + "/logs/api.log"
-        let apiPath = scriptDir + "/dashboard/api.py"
-
-        try? FileManager.default.createDirectory(atPath: scriptDir + "/logs",
-            withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: logPath, contents: nil)
-
-        // Hermes venv Python 우선 (fastapi+uvicorn 설치됨)
-        let candidates = ["/Users/JSK/hermes-agent/venv/bin/python3",
-            "/opt/homebrew/bin/python3", "python3"]
-
-        for python in candidates {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: python)
-            process.arguments = [apiPath]
-            process.currentDirectoryURL = URL(fileURLWithPath: scriptDir)
-            if let handle = FileHandle(forWritingAtPath: logPath) {
-                process.standardOutput = handle
-                process.standardError = handle
+        try? "startServer() called at \(Date())\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
+                try? "startServer: self is nil!\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
+                return
             }
-            do {
-                try process.run()
-                Thread.sleep(forTimeInterval: 1.5)
-                if process.isRunning {
-                    serverProcess = process
-                    print("서버 시작됨 (Python: \(python), PID: \(process.processIdentifier))")
-                    return
+            // Port 8000 충돌 체크
+            let inUse = self.isPortInUse(8000)
+            try? "Port 8000 in use: \(inUse)\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
+            if inUse {
+                print("서버 이미 실행 중 (port 8000)")
+                DispatchQueue.main.async {
+                    self.serverOK = true
+                    self.statusMenuItem.title = "● 실행중"
                 }
-            } catch {
-                continue
+                return
+            }
+            let server = HTTPServer(port: 8000)
+            try? "Starting server...\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
+            server.start()
+            self.httpServer = server
+            try? "Server started, waiting 0.3s...\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
+            Thread.sleep(forTimeInterval: 0.3)
+            DispatchQueue.main.async {
+                self.serverOK = true
+                self.statusMenuItem.title = "● 실행중"
+                print("HTTP 서버 시작됨 (port 8000)")
+                try? "HTTP server running on :8000\n".write(toFile: "/tmp/mactt_debug.log", atomically: true, encoding: .utf8)
             }
         }
-        print("서버 시작 실패: 모든 Python 경로 실패")
     }
+
+    func stopServer() {
+        httpServer?.stop()
+        httpServer = nil
+    }
+
+    private func isPortInUse(_ port: UInt16) -> Bool {
+        let sock = socket(AF_INET, SOCK_STREAM, 0)
+        guard sock >= 0 else { return false }
+        // SO_REUSEADDR로 TIME_WAIT 우회
+        var reuse: Int32 = 1
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = CFSwapInt16HostToBig(port)
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_addr.s_addr = INADDR_ANY  // 0.0.0.0
+
+        let bindResult = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        close(sock)
+        return bindResult != 0  // bind failed = port in use
+    }
+
+    // MARK: - Accessibility
 
     func checkAccessibilityPermission() {
         if AXIsProcessTrusted() {
             print("✅ AX 권한 있음 (직접 AX API 사용)")
             return
         }
-
-        // osascript subprocess가 가능한지 확인
         let osaWorks = runViaOSA("tell application \"System Events\" to get name of every process")
         if !osaWorks.isEmpty {
             print("✅ AX 권한 없지만 osascript fallback 사용 가능")
             return
         }
-
         print("⚠️ AX 권한 없음 — 다이얼로그 표시 (1회만)")
         DispatchQueue.main.async { [weak self] in
             guard let self = self, !self.axPromptShown else { return }
@@ -222,13 +221,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
                 NSWorkspace.shared.open(url)
             }
-        }
-    }
-
-    func stopServer() {
-        if let proc = serverProcess, proc.isRunning {
-            proc.terminate()
-            serverProcess = nil
         }
     }
 
@@ -308,18 +300,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return ""
         }
 
-        // 1. 브라우저 AppleScript (osascript subprocess)
+        // 1. Browser AppleScript (osascript subprocess)
         if let script = Config.browserScripts[name] {
             title = runViaOSA(script)
         }
 
-        // 2. System Events (osascript subprocess, 모든 앱)
+        // 2. System Events (osascript subprocess, all apps)
         if title.isEmpty {
             title = runViaOSA(
                 "tell application \"System Events\" to tell process \"\(name)\" to get title of window 1")
         }
 
-        // 3. AX API 직접 (MacTT에 AX 권한 있을 때만)
+        // 3. AX API (only if MacTT has direct AX trust)
         if title.isEmpty && AXIsProcessTrusted() {
             title = axWindowTitle(pid: app.processIdentifier)
         }
@@ -335,7 +327,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return name
     }
 
-    /// osascript subprocess로 AppleScript 실행 (시스템 TCC trust 활용)
     func runViaOSA(_ script: String) -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -381,23 +372,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func sendHeartbeat(app: String, timestamp: Date, duration: TimeInterval) {
         let title = getWindowTitle()
-        let axTrusted = AXIsProcessTrusted()
         let finalTitle = title.isEmpty ? app : title
-        let titleSource: String = {
-            if title.isEmpty { return "fallback_app" }
-            // osascript subprocess에서 왔는지 AX API에서 왔는지는 여기서 알 수 없지만
-            // 디버깅용으로 간략 표시
-            return axTrusted ? "ax_api" : "osascript"
-        }()
         let body: [String: Any] = [
             "timestamp": timestamp.timeIntervalSince1970,
             "duration": max(duration, 1.0),
-            "data": [
-                "app": app,
-                "title": finalTitle,
-                "_src": titleSource,
-                "_ax": axTrusted
-            ]
+            "data": ["app": app, "title": finalTitle]
         ]
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body),
               let url = URL(string: "\(Config.serverURL)/api/heartbeat") else { return }
@@ -407,14 +386,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
 
-        URLSession.shared.dataTask(with: req) { [weak self] data, resp, error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 {
-                    self.serverOK = true
-                    self.statusMenuItem.title = "● 실행중"
-                } else {
-                    self.statusMenuItem.title = error == nil ? "● 실행중" : "○ 서버 연결 끊김"
+        URLSession.shared.dataTask(with: req) { data, resp, error in
+            if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 {
+                DispatchQueue.main.async { [weak self] in
+                    self?.serverOK = true
                 }
             }
         }.resume()
@@ -470,6 +445,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let obs = notificationObserver {
             workspace.notificationCenter.removeObserver(obs)
         }
+        if let obs = axObserver {
+            workspace.notificationCenter.removeObserver(obs)
+        }
         NSApplication.shared.terminate(nil)
     }
 
@@ -484,10 +462,3 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return "\(m)m \(String(format: "%02d", sec))s"
     }
 }
-
-// MARK: - Entry Point
-
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()

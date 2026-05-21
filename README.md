@@ -10,7 +10,7 @@ macOS (터미널)                        Docker
 ┌──────────────────────────┐        ┌──────────────────────────────┐
 │  tray_app.py (rumps)     │  HTTP  │  FastAPI + SQLite             │
 │  ├─ ⏱ 메뉴바 아이콘       │ ──────▶│  ├─ /api/heartbeat           │
-│  ├─ NSWorkspace 알림      │ 5초    │  ├─ /api/today               │
+│  ├─ NSWorkspace 알림      │ 3초    │  ├─ /api/today               │
 │  ├─ 브라우저 탭 제목      │        │  ├─ /api/sessions/{app}      │
 │  └─ Accessibility 창 제목 │        │  └─ index.html (Chart.js)    │
 └──────────────────────────┘        └──────────────────────────────┘

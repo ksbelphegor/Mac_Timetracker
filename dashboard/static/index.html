@@ -562,24 +562,51 @@ function extractSite(title, app) {
 function extractDomain(url) {
   if (!url) return null;
   try {
-    let h = new URL(url).hostname;
-    h = h.replace(/^(www|m|mobile)\./, '');
+    let h = new URL(url).hostname.toLowerCase();
+    // 서브도메인 정리 (www, m, mobile, page-N, series 등)
+    h = h.replace(/^(www|m|mobile|web|blog|mail|page(?:-\d+)?|series|read|board|bbs|cafe|game|news?|shop|docs|support|help|stage|dev|api|login|account|en|ko|ja|zh|cn|jp)\./, '');
     return h;
   }
   catch(e) { return null; }
 }
+
+// 자주 쓰는 사이트: 도메인 → 표시용 한글명
+const siteNames = {
+  'newtoki.com': '뉴토끼', 'newtoki.net': '뉴토끼',
+  'newtoki.org': '뉴토끼', 'newtoki1.com': '뉴토끼',
+  'newtoki2.com': '뉴토끼', 'newtoki3.com': '뉴토끼',
+  'naver.com': '네이버', 'daum.net': '다음', 'kakao.com': '카카오',
+  'youtube.com': 'YouTube', 'github.com': 'GitHub',
+  'google.com': 'Google', 'twitter.com': 'Twitter',
+  'x.com': 'X', 'reddit.com': 'Reddit', 'discord.com': 'Discord',
+  'namu.wiki': '나무위키', 'fmkorea.com': '에펨코리아',
+  'dcinside.com': '디시인사이드', 'ppomppu.co.kr': '뽐뿌',
+  'clien.net': '클리앙', 'ruliweb.com': '루리웹',
+  'inven.co.kr': '인벤',
+};
+
 function extractGroupName(s) {
-  // 1. URL이 있으면 도메인으로 그룹핑 (브라우저 탭 — 가장 정확)
+  // 1. URL이 있으면 도메인으로 그룹핑
   if (s.url) {
     const d = extractDomain(s.url);
-    if (d) return d;
+    if (d) return siteNames[d] || d;  // 친근한 이름이 있으면 사용
   }
-  // 2. URL이 없으면 타이틀 기반 fallback (비브라우저 앱)
+  // 2. URL이 없으면 타이틀 기반 fallback
   let title = s.title || '';
   if (!title) return null;
-  // 마지막 구분자 뒤가 사이트/앱명일 가능성 높음
-  const segments = title.split(/ [\-–—|] /).map(s => s.trim()).filter(Boolean);
-  if (segments.length > 1) return segments[segments.length - 1];
+  // 다양한 구분자 패턴 시도 (공백 포함/미포함)
+  const patterns = [
+    / [\-–—|] /,           // "title - site"
+    /[\-–—]\s*/,            // "title-site" (공백 없음)
+    /\s*\|+\s*/,            // "title | site" or "title||site"
+    / :: /,                 // "title :: site"
+    /\s*·\s*/,              // "title · site" (middle dot)
+    /\s*◆\s*/,              // "title ◆ site"
+  ];
+  for (const sep of patterns) {
+    const segments = title.split(sep).map(s => s.trim()).filter(Boolean);
+    if (segments.length > 1) return segments[segments.length - 1];
+  }
   return title;
 }
 

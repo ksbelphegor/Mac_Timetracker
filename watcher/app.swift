@@ -18,7 +18,9 @@ enum Config {
         "Arc": "tell application \"Arc\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
         "Opera": "tell application \"Opera\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
         "Opera GX": "tell application \"Opera GX\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
-        "Orion": "tell application \"Orion\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "시크릿 모드": "tell application \"시크릿 모드\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "네이버 웨일": "tell application \"네이버 웨일\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
+        "Whale": "tell application \"Whale\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
     ]
 }
 

@@ -132,7 +132,8 @@ class Database {
 
     private let skipApps: Set<String> = ["loginwindow", "WindowServer", "SystemUIServer", "Dock", "Spotlight", "NotificationCenter"]
     private let browserApps: Set<String> = ["Brave Browser", "Google Chrome", "Safari", "Firefox",
-        "Microsoft Edge", "Arc", "Orion", "Opera", "Opera GX", "Vivaldi", "Tor Browser"]
+        "Microsoft Edge", "Arc", "Orion", "Opera", "Opera GX", "Vivaldi", "Tor Browser",
+        "네이버 웨일", "Whale", "시크릿 모드"]
 
     func getTodayEvents(bucketId: String = "aw-watcher-window",
                         targetDate: String? = nil) -> [[String: Any]] {

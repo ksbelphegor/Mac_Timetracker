@@ -569,22 +569,18 @@ function extractDomain(url) {
   catch(e) { return null; }
 }
 function extractGroupName(s) {
-  // 1. 제목에서 그룹명 추출 (브라우저 탭이면 브라우저명 제거)
-  let title = s.title;
-  if (title) {
-    const browsers = ['Google Chrome','Safari','Firefox','Microsoft Edge','Brave Browser','Arc','Opera','Vivaldi','Orion'];
-    for (const b of browsers) {
-      const suffix = ` - ${b}`;
-      if (title.endsWith(suffix)) { title = title.slice(0, -suffix.length).trim(); break; }
-    }
-    // 첫 번째 구분자 앞부분 = 사이트명 (e.g. "YouTube - video" → "YouTube")
-    const first = title.split(/ [\-–—|] /)[0].trim();
-    if (first) return first;
+  // 1. URL이 있으면 도메인으로 그룹핑 (브라우저 탭 — 가장 정확)
+  if (s.url) {
+    const d = extractDomain(s.url);
+    if (d) return d;
   }
-  // 2. 제목이 없으면 URL 도메인으로 fallback
-  const d = extractDomain(s.url);
-  if (d) return d;
-  return title || null;
+  // 2. URL이 없으면 타이틀 기반 fallback (비브라우저 앱)
+  let title = s.title || '';
+  if (!title) return null;
+  // 마지막 구분자 뒤가 사이트/앱명일 가능성 높음
+  const segments = title.split(/ [\-–—|] /).map(s => s.trim()).filter(Boolean);
+  if (segments.length > 1) return segments[segments.length - 1];
+  return title;
 }
 
 function filterBrowser(app) {
@@ -802,7 +798,7 @@ function pomoRender() {
 function refresh() { loadHome(); }
 initDatePicker();
 refresh();
-setInterval(refresh, 5000);
+setInterval(refresh, 3000);
 
 // 알림 권한 요청
 if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();

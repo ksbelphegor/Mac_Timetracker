@@ -41,6 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var windowTitle = ""
     var windowURL = ""
     var windowTitleTime: Date = .distantPast
+    var cachedAppName = ""
     var serverOK = false
 
     // Menu items — force unwrap because setupMenu() runs before use
@@ -302,19 +303,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func getWindowTitle() -> String {
         let now = Date()
-        if now.timeIntervalSince(windowTitleTime) < Config.windowTitleCacheTTL {
+        guard let app = workspace.frontmostApplication,
+              let name = app.localizedName else {
+            windowTitle = ""
+            windowURL = ""
+            cachedAppName = ""
+            windowTitleTime = now
+            return ""
+        }
+
+        // 캐시는 같은 앱에서만 유효 (앱 전환 시 무효화)
+        if now.timeIntervalSince(windowTitleTime) < Config.windowTitleCacheTTL, cachedAppName == name {
             return windowTitle
         }
 
         var title = ""
         var url = ""
-        guard let app = workspace.frontmostApplication,
-              let name = app.localizedName else {
-            windowTitle = ""
-            windowURL = ""
-            windowTitleTime = now
-            return ""
-        }
 
         // 1. Browser AppleScript (osascript subprocess) — returns "title|TITLEURL|url"
         if let script = Config.browserScripts[name] {
@@ -347,6 +351,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         windowTitle = title
         windowURL = url
+        cachedAppName = name
         windowTitleTime = now
         return title
     }
@@ -404,7 +409,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let title = getWindowTitle()
         let finalTitle = title.isEmpty ? app : title
         var dataDict: [String: String] = ["app": app, "title": finalTitle]
-        if !windowURL.isEmpty {
+        // URL은 브라우저 앱에서만 의미 있음
+        // 캐시 히트로 이전 앱의 URL이 남아있는 경우 방지
+        if !windowURL.isEmpty, Config.browserScripts.keys.contains(app) {
             dataDict["url"] = windowURL
         }
         let body: [String: Any] = [

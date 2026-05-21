@@ -116,6 +116,37 @@ cd Mac_Timetracker
 - Python 3.10+
 - macOS 접근성 권한 (System Settings → Privacy → Accessibility)
 
+---
+
+## 변경 이력
+
+### 2026-05-21 — 사이트 분류 정밀화 + 캐시 오염 수정
+
+**사이트 분류 (`extractGroupName` in `dashboard/static/index.html`)**
+
+- URL 도메인 기반 그룹핑으로 변경 (가장 정확)
+- `siteNames` 맵: 도메인 → 한글 사이트명 (뉴토끼, 에펨코리아, 네이버, YouTube 등 20+)
+- `extractDomain`: 서브도메인 정리 강화 (`page-1.`, `cafe.`, `series.` 등 제거)
+- title fallback: 첫 번째 세그먼트를 사이트명으로 사용 (한국 커뮤니티 사이트 패턴 대응)
+- URL 없는 세션 진단 로그 (F12 Console 확인)
+
+**캐시 오염 수정 (`watcher/app.swift`)**
+
+- `cachedAppName` 추가 → 같은 앱에서만 캐시 유효, 앱 전환 시 무효화
+- `sendHeartbeat`: URL은 브라우저 앱에서만 attach
+  → DaVinci Resolve 등 비브라우저 앱에 브라우저 URL이 잘못 붙는 문제 해결
+
+**브라우저 지원 추가**
+
+- 네이버 웨일 (Whale), 시크릿 모드 AppleScript 추가
+  (`Config.browserScripts` + `Database.browserApps`)
+
+**새로고침 주기**
+
+- 대시보드 `setInterval`: 5s → 3s (Swift heartbeat 3s와 일치)
+
+---
+
 ## 라이선스
 
 MIT

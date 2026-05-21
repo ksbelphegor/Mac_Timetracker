@@ -481,6 +481,12 @@ async function loadHomeSessions(name) {
     const sorter = getSGSorter();
     const sorted = Object.values(groups).sort(sorter).slice(0, 30);
 
+    // 진단: URL 없는 세션 있으면 로그
+    const noUrlSessions = data.sessions.filter(s => !s.url);
+    if (noUrlSessions.length > 0) {
+      console.debug(`[extractGroupName] ${noUrlSessions.length}개 세션 URL 없음 (title only)`, noUrlSessions.slice(0, 3).map(s => s.title));
+    }
+
     listEl.innerHTML = `
       <div class="sg-list-header">
         <span class="lh-title lh-btn ${sgSortBy==='title'?'active':''}" onclick="sortSG('title')">사이트${sortArrow('title')}</span>
@@ -586,26 +592,31 @@ const siteNames = {
 };
 
 function extractGroupName(s) {
-  // 1. URL이 있으면 도메인으로 그룹핑
+  // 1. URL이 있으면 도메인으로 그룹핑 (가장 정확 — YouTube, 에펨코리아 모두 해결)
   if (s.url) {
     const d = extractDomain(s.url);
-    if (d) return siteNames[d] || d;  // 친근한 이름이 있으면 사용
+    if (d) return siteNames[d] || d;
   }
   // 2. URL이 없으면 타이틀 기반 fallback
+  //    (AppleScript 실패 등으로 URL 미캡처된 경우)
   let title = s.title || '';
   if (!title) return null;
-  // 다양한 구분자 패턴 시도 (공백 포함/미포함)
   const patterns = [
     / [\-–—|] /,           // "title - site"
-    /[\-–—]\s*/,            // "title-site" (공백 없음)
-    /\s*\|+\s*/,            // "title | site" or "title||site"
+    /[\-–—]\s*/,            // "title-site"
+    /\s*\|+\s*/,            // "title | site"
     / :: /,                 // "title :: site"
-    /\s*·\s*/,              // "title · site" (middle dot)
+    /\s*·\s*/,              // "title · site"
     /\s*◆\s*/,              // "title ◆ site"
   ];
   for (const sep of patterns) {
     const segments = title.split(sep).map(s => s.trim()).filter(Boolean);
-    if (segments.length > 1) return segments[segments.length - 1];
+    if (segments.length > 1) {
+      // 첫 번째 세그먼트 = 사이트명 (에펨코리아, 디시, 네이버 등 한국 커뮤니티)
+      // URL 기반이 YouTube 등 국제사이트를 커버하므로,
+      // title-only fallback에서는 한국형 패턴(사이트명-first)을 우선
+      return segments[0];
+    }
   }
   return title;
 }

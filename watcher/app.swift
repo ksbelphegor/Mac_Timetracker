@@ -1,6 +1,7 @@
 import Cocoa
 import Foundation
 import ApplicationServices
+import os
 
 // MARK: - Configuration
 
@@ -66,6 +67,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         config.timeoutIntervalForRequest = 10
         return URLSession(configuration: config)
     }()
+
+    let logger = Logger(subsystem: "com.jsk.mactimetracker", category: "app")
 
     // MARK: - Deinit
 
@@ -154,7 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Port 8000 충돌 체크
             let inUse = self.isPortInUse(8000)
             if inUse {
-                print("서버 이미 실행 중 (port 8000)")
+                logger.log("서버 이미 실행 중 (port 8000)")
                 DispatchQueue.main.async {
                     self.serverOK = true
                     self.statusMenuItem.title = "● 실행중"
@@ -168,7 +171,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 self.serverOK = true
                 self.statusMenuItem.title = "● 실행중"
-                print("HTTP 서버 시작됨 (port 8000)")
+                self.logger.log("HTTP 서버 시작됨 (port 8000)")
             }
         }
     }
@@ -204,15 +207,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func checkAccessibilityPermission() {
         if AXIsProcessTrusted() {
-            print("✅ AX 권한 있음 (직접 AX API 사용)")
+            logger.notice("✅ AX 권한 있음 (직접 AX API 사용)")
             return
         }
         let osaWorks = runViaOSA("tell application \"System Events\" to get name of every process")
         if !osaWorks.isEmpty {
-            print("✅ AX 권한 없지만 osascript fallback 사용 가능")
+            logger.notice("✅ AX 권한 없지만 osascript fallback 사용 가능")
             return
         }
-        print("⚠️ AX 권한 없음 — 다이얼로그 표시 (1회만)")
+        logger.warning("⚠️ AX 권한 없음 — 다이얼로그 표시 (1회만)")
         DispatchQueue.main.async { [weak self] in
             guard let self = self, !self.axPromptShown else { return }
             self.axPromptShown = true
@@ -320,32 +323,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var title = ""
         var url = ""
 
-        // 1. Browser AppleScript (osascript subprocess) — returns "title|TITLEURL|url"
+        // 1. CGWindow API (Core Graphics — instant, no permissions needed, works for all apps)
+        title = cgWindowTitle(pid: app.processIdentifier)
+
+        // 2. Browser AppleScript — only for URL capture + title fallback if CGWindow missed
         if let script = Config.browserScripts[name] {
             let output = runViaOSA(script)
             if let sepRange = output.range(of: "|TITLEURL|") {
+                // AppleScript got both title and URL — use its title (more accurate for browser tabs)
                 title = String(output[output.startIndex..<sepRange.lowerBound])
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 url = String(output[sepRange.upperBound...])
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-            } else {
+            } else if title.isEmpty {
+                // AppleScript failed or returned no separator, CGWindow also failed
                 title = output
             }
+            // else: CGWindow already has title, AppleScript failed — keep CGWindow title
         }
 
-        // 2. Firefox needs special handling (no URL via AppleScript)
+        // 3. Firefox special handling (no URL via AppleScript, CGWindow may miss it)
         if title.isEmpty, name == "Firefox" {
             title = runViaOSA("tell application \"System Events\" to tell process \"firefox\" to get title of window 1")
         }
 
-        // 3. System Events (osascript subprocess, all apps)
+        // 4. System Events via displayed name (handles localizedName != process name)
         if title.isEmpty {
             title = runViaOSA(
-                "tell application \"System Events\" to tell process \"\(name)\" to get title of window 1")
+                "tell application \"System Events\" to tell (first process whose displayed name is \"\(name)\") to get title of window 1")
         }
 
-        // 4. AX API (only if MacTT has direct AX trust)
-        if title.isEmpty && AXIsProcessTrusted() {
+        // 5. AX API as ultimate fallback (needs AX trust, usually not needed)
+        if title.isEmpty {
             title = axWindowTitle(pid: app.processIdentifier)
         }
 
@@ -354,6 +363,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         cachedAppName = name
         windowTitleTime = now
         return title
+    }
+
+    /// Get window title via Core Graphics Window Server API — no special permissions needed.
+    private func cgWindowTitle(pid: pid_t) -> String {
+        let option: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windows = CGWindowListCopyWindowInfo(option, kCGNullWindowID) as? [[String: Any]] else {
+            return ""
+        }
+        let intPid = Int(pid) // kCGWindowOwnerPID is CFNumber → Int in Swift, not Int32
+        for w in windows {
+            guard (w[kCGWindowLayer as String] as? Int) == 0 else { continue }
+            guard let ownerPID = w[kCGWindowOwnerPID as String] as? Int,
+                  ownerPID == intPid else { continue }
+            if let name = w[kCGWindowName as String] as? String, !name.isEmpty {
+                return name.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return ""
     }
 
     func getFrontmostApp() -> String {
@@ -376,7 +403,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if process.terminationStatus != 0 {
                 let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
                 if let errStr = String(data: errData, encoding: .utf8), !errStr.isEmpty {
-                    print("osascript err: \(errStr)")
+                    logger.error("osascript err: \(errStr)")
                 }
                 return ""
             }
@@ -395,6 +422,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             appRef, kAXFocusedWindowAttribute as CFString, &focused)
         guard focusResult == .success else { return "" }
 
+        // focusResult == .success guarantees correct type, forced cast is safe
         let winElement = focused as! AXUIElement
         var title: CFTypeRef?
         let titleResult = AXUIElementCopyAttributeValue(
@@ -432,7 +460,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 {
                     self?.serverOK = true
                 } else if let error = error {
-                    print("heartbeat 실패: \(error.localizedDescription)")
+                    self?.logger.error("heartbeat 실패: \(error.localizedDescription)")
                 }
             }
         }.resume()

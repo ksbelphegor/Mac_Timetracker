@@ -206,6 +206,112 @@
   ::-webkit-scrollbar { width:6px; }
   ::-webkit-scrollbar-track { background:transparent; }
   ::-webkit-scrollbar-thumb { background:#30363d; border-radius:3px; }
+  /* ── 태그 탭 ── */
+  .tag-summary { display:flex; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
+  .tag-summary-card {
+    flex:1; min-width:140px; background:#161b22; border:1px solid #30363d;
+    border-radius:10px; padding:12px 16px;
+  }
+  .tag-summary-card .ts-label { font-size:11px; color:#8b949e; margin-bottom:4px; }
+  .tag-summary-card .ts-value { font-size:22px; font-weight:bold; font-variant-numeric:tabular-nums; }
+  .tag-summary-card.work .ts-value { color:#f0883e; }
+  .tag-summary-card.distraction .ts-value { color:#f85149; }
+  .tag-summary-card.untagged .ts-value { color:#8b949e; }
+  .tag-filters { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
+  .tag-filter-btn {
+    padding:5px 14px; border-radius:14px; border:1px solid #30363d;
+    background:transparent; color:#8b949e; font-size:12px; cursor:pointer; transition:all 0.15s;
+  }
+  .tag-filter-btn:hover { border-color:#58a6ff; color:#c9d1d9; }
+  .tag-filter-btn.active { background:#1f6feb33; border-color:#1f6feb; color:#58a6ff; }
+  .tag-list-scroll { flex:1; overflow-y:auto; }
+  .tag-app-item {
+    display:flex; align-items:center; gap:10px;
+    padding:8px 12px; border-radius:8px; border:1px solid #21262d;
+    margin-bottom:4px; transition:background 0.15s;
+  }
+  .tag-app-item:hover { background:#161b22; }
+  .tag-app-icon { width:20px; height:20px; border-radius:4px; flex-shrink:0; }
+  .tag-app-name { flex:1; font-size:14px; font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tag-app-time { font-size:13px; color:#3fb950; font-weight:600; margin-right:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .tag-select {
+    padding:4px 10px; border-radius:6px; border:1px solid #30363d;
+    background:#0d1117; color:#c9d1d9; font-size:12px; cursor:pointer;
+    min-width:80px; text-align:center;
+  }
+  .tag-select:focus { outline:none; border-color:#58a6ff; }
+  .tag-select.opt-work { border-color:#f0883e44; }
+  .tag-select.opt-distraction { border-color:#f8514944; }
+  .tag-select.val-work { border-color:#f0883e; background:#f0883e15; color:#f0883e; }
+  .tag-select.val-distraction { border-color:#f85149; background:#f8514915; color:#f85149; }
+  .tag-empty { flex:1; display:flex; align-items:center; justify-content:center; color:#8b949e; font-size:15px; }
+  .tag-status { color:#8b949e; font-size:12px; margin-bottom:8px; }
+  /* ── 주간 차트 ── */
+  .tag-breakdown-card { transition:border-color 0.15s; }
+  .tag-breakdown-card:hover { border-color:#30363d; }
+  .tag-apps-list { max-height:90px; overflow-y:auto; }
+  .tag-apps-list::-webkit-scrollbar { width:3px; }
+  .tag-apps-list::-webkit-scrollbar-thumb { background:#30363d; border-radius:2px; }
+  /* ── 태그 관리 ── */
+  .tag-mgmt-item {
+    display:flex; align-items:center; gap:8px;
+    padding:6px 10px; border-radius:6px; border:1px solid #21262d; margin-bottom:3px;
+  }
+  .tag-mgmt-item:hover { background:#161b22; }
+  .tag-mgmt-color { width:14px; height:14px; border-radius:50%; flex-shrink:0; border:1px solid #30363d; }
+  .tag-mgmt-name { flex:1; font-size:13px; color:#c9d1d9; }
+  .tag-mgmt-count { font-size:11px; color:#8b949e; margin-right:8px; }
+  .tag-mgmt-edit, .tag-mgmt-del {
+    padding:3px 8px; border-radius:4px; border:1px solid #30363d;
+    background:transparent; color:#8b949e; font-size:11px; cursor:pointer;
+  }
+  .tag-mgmt-edit:hover { border-color:#58a6ff; color:#58a6ff; }
+  .tag-mgmt-del:hover { border-color:#f85149; color:#f85149; }
+  .tag-mgmt-inline-edit {
+    display:flex; align-items:center; gap:6px; flex:1;
+  }
+  .tag-mgmt-inline-edit input[type=text] {
+    flex:1; padding:4px 8px; border-radius:4px; border:1px solid #30363d;
+    background:#0d1117; color:#c9d1d9; font-size:13px; outline:none;
+  }
+  .tag-mgmt-inline-edit input[type=color] {
+    width:28px; height:28px; border-radius:4px; border:1px solid #30363d; padding:1px; cursor:pointer;
+  }
+  .tag-mgmt-save, .tag-mgmt-cancel {
+    padding:3px 8px; border-radius:4px; border:none; font-size:11px; cursor:pointer;
+  }
+  .tag-mgmt-save { background:#238636; color:#fff; }
+  .tag-mgmt-save:hover { background:#2ea043; }
+  .tag-mgmt-cancel { background:#21262d; color:#8b949e; border:1px solid #30363d; }
+  /* ── 규칙 목록 ── */
+  .rule-item {
+    display:flex; align-items:center; gap:8px;
+    padding:7px 10px; border-radius:6px; border:1px solid #21262d; margin-bottom:3px;
+  }
+  .rule-item:hover { background:#161b22; }
+  .rule-type-badge {
+    padding:2px 8px; border-radius:10px; font-size:10px; font-weight:600;
+    border:1px solid #30363d; white-space:nowrap;
+  }
+  .rule-type-badge.app { background:#1f6feb22; border-color:#1f6feb44; color:#58a6ff; }
+  .rule-type-badge.title { background:#d2992222; border-color:#d2992244; color:#d29922; }
+  .rule-pattern { font-size:13px; font-family:monospace; color:#c9d1d9; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .rule-tag-badge {
+    padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600; white-space:nowrap;
+  }
+  .rule-btn {
+    padding:2px 6px; border-radius:3px; border:none;
+    background:transparent; color:#585e6a; font-size:11px; cursor:pointer;
+  }
+  .rule-btn:hover { color:#c9d1d9; }
+  .rule-btn.del:hover { color:#f85149; }
+  /* ── 태그 통계 카드 ── */
+  .tag-stat-card {
+    flex:1; min-width:120px; background:#161b22; border:1px solid #30363d;
+    border-radius:10px; padding:10px 14px; text-align:center;
+  }
+  .tag-stat-card .tsc-name { font-size:12px; font-weight:600; margin-bottom:4px; }
+  .tag-stat-card .tsc-time { font-size:18px; font-weight:bold; font-variant-numeric:tabular-nums; }
 </style>
 </head>
 <body>
@@ -226,6 +332,7 @@
 <div class="tabs">
   <button class="tab-btn active" data-tab="home" onclick="switchTab('home')">🏠 홈</button>
   <button class="tab-btn" data-tab="browser" onclick="switchTab('browser')">🌐 브라우저</button>
+  <button class="tab-btn" data-tab="tags" onclick="switchTab('tags')">🏷 태그</button>
   <button class="tab-btn" data-tab="work" onclick="switchTab('work')">🍅 작업</button>
 </div>
 
@@ -262,6 +369,40 @@
   </div>
 </div>
 
+<!-- ══════ 태그 탭 (팝업 연동) ══════ -->
+<div class="tab-content" id="tab-tags">
+  <div class="panel" style="flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:8px;">
+    <!-- 2열: 차트 + 카테고리 (시간 포함) -->
+    <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:14px;flex:1;min-height:0;overflow:hidden;">
+
+      <!-- Left: 오늘 활동 (전체 공간 사용) -->
+      <div style="display:flex;flex-direction:column;min-height:0;overflow-y:auto;gap:6px;">
+        <!-- 오늘 활동 브레이크다운 -->
+        <div id="tag-today-section" style="display:none;flex-shrink:0;">
+          <div style="font-size:11px;font-weight:600;color:#c9d1d9;margin-bottom:4px;">📊 오늘 활동</div>
+          <div id="tag-today-bar" style="display:flex;height:32px;border-radius:8px;overflow:hidden;"></div>
+          <div id="tag-today-legend" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;"></div>
+          <!-- 인라인 태그별 상세 (항상 표시) -->
+          <div id="tag-today-breakdown" style="margin-top:6px;display:flex;flex-direction:column;gap:4px;"></div>
+        </div>
+        <div id="tag-today-empty" style="display:none;flex-shrink:0;padding:6px 0;color:#585e6a;font-size:12px;">📊 오늘 기록이 없습니다</div>
+      </div>
+
+      <!-- Right: 카테고리 목록 + 시간 -->
+      <div style="display:flex;flex-direction:column;min-height:0;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-shrink:0;">
+          <span style="font-size:13px;font-weight:600;color:#c9d1d9;">🏷 카테고리</span>
+          <button class="date-btn" onclick="openCategoriesPopup()" style="padding:2px 8px;font-size:10px;">✏️ 관리</button>
+          <span style="flex:1"></span>
+          <span style="font-size:10px;color:#585e6a;" id="tag-status"></span>
+        </div>
+        <div id="tag-cat-mini" style="flex:1;overflow-y:auto;"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <!-- ══════ 작업 탭 (뽀모도로) ══════ -->
 <div class="tab-content" id="tab-work">
   <div class="pomodoro-wrap">
@@ -289,7 +430,12 @@
 
 <script>
 /* ═══════════ 공통 ═══════════ */
-let selectedDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+let selectedDate = todayLocal(); // YYYY-MM-DD (로컬 시간대)
+
+function todayLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
 
 function fmt(secs) {
   const h = Math.floor(secs / 3600), m = Math.floor((secs%3600)/60), s = Math.floor(secs%60);
@@ -312,7 +458,19 @@ function esc(s) {
   const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
 }
 function escAttr(s) {
-  return esc(s).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+  // HTML escape first, then make it safe for onclick='...' attribute value
+  // Must handle: \ (backslash first!), ', ", \n, \r
+  return esc(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '&quot;')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+function countNodes(nodes) {
+  let c = 0;
+  for (const n of nodes) { c += 1; if (n.children) c += countNodes(n.children); }
+  return c;
 }
 
 /* ═══════════ 날짜 ═══════════ */
@@ -322,19 +480,27 @@ function initDatePicker() {
 
 function onDateChange() {
   selectedDate = document.getElementById('date-picker').value;
+  expandedTitles = new Set();
+  homeSelected = null;
   refreshAll();
 }
 
 function changeDate(delta) {
-  const d = new Date(selectedDate);
+  expandedTitles = new Set();
+  homeSelected = null;
+  // Parse selectedDate as local date, add delta, re-format as local YYYY-MM-DD
+  const parts = selectedDate.split('-').map(Number);
+  const d = new Date(parts[0], parts[1] - 1, parts[2]);
   d.setDate(d.getDate() + delta);
-  selectedDate = d.toISOString().slice(0, 10);
+  selectedDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   document.getElementById('date-picker').value = selectedDate;
   refreshAll();
 }
 
 function goToday() {
-  selectedDate = new Date().toISOString().slice(0, 10);
+  expandedTitles = new Set();
+  homeSelected = null;
+  selectedDate = todayLocal();
   document.getElementById('date-picker').value = selectedDate;
   refreshAll();
 }
@@ -342,11 +508,14 @@ function goToday() {
 function refreshAll() {
   loadHome();
   if (document.getElementById('tab-browser').classList.contains('active')) loadBrowserSessions();
+  if (document.getElementById('tab-tags').classList.contains('active')) {
+    if (!window._tagLoaded) return;
+    refreshTagStats();
+  }
 }
 
 function dateParam() {
-  const today = new Date().toISOString().slice(0, 10);
-  return selectedDate !== today ? `?target_date=${selectedDate}` : '';
+  return selectedDate !== todayLocal() ? `?target_date=${selectedDate}` : '';
 }
 
 /* ═══════════ 탭 전환 ═══════════ */
@@ -354,6 +523,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-'+name));
   if (name === 'browser') loadBrowserSessions();
+  if (name === 'tags') { window._tagLoaded = false; loadTags(); }
 }
 
 /* ═══════════ 홈 탭 ═══════════ */
@@ -480,12 +650,6 @@ async function loadHomeSessions(name) {
     // 그룹핑 + 정렬 + 상위 30개
     const sorter = getSGSorter();
     const sorted = Object.values(groups).sort(sorter).slice(0, 30);
-
-    // 진단: URL 없는 세션 있으면 로그
-    const noUrlSessions = data.sessions.filter(s => !s.url);
-    if (noUrlSessions.length > 0) {
-      console.debug(`[extractGroupName] ${noUrlSessions.length}개 세션 URL 없음 (title only)`, noUrlSessions.slice(0, 3).map(s => s.title));
-    }
 
     listEl.innerHTML = `
       <div class="sg-list-header">
@@ -714,6 +878,278 @@ async function loadBrowserSessions() {
   }
 }
 
+/* ═══════════ 태그 탭 (v2) ═══════════ */
+let tagsData = [];
+let statsData = [];
+let matchCache = {};  // {__all__: categoryMatchesData}
+let cachedDate = '';
+let breakdownBuilt = false;
+
+
+function renderTodayBreakdown(stats) {
+  const el = document.getElementById('tag-today-bar');
+  const legend = document.getElementById('tag-today-legend');
+  const section = document.getElementById('tag-today-section');
+  const empty = document.getElementById('tag-today-empty');
+  const breakdown = document.getElementById('tag-today-breakdown');
+  const tagged = stats.filter(s => s.tag !== '__untagged__');
+  const total = tagged.reduce((s, t) => s + (t.seconds || 0), 0);
+  if (total < 1) { section.style.display = 'none'; empty.style.display = ''; return; }
+  section.style.display = ''; empty.style.display = 'none';
+
+  // Stacked bar (proportional view) — 항상 카테고리명 표시
+  el.innerHTML = tagged.map(t => {
+    const pct = (t.seconds / total) * 100;
+    const label = pct > 12 ? esc(t.tag) + ' ' + fmt(t.seconds) : esc(t.tag);
+    return `<div style="flex:${pct};background:${t.color};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;min-width:0;overflow:hidden;white-space:nowrap;text-shadow:0 1px 2px #00000066;" title="${esc(t.tag)} ${fmt(t.seconds)}">${label}</div>`;
+  }).join('');
+
+  // Legend
+  legend.innerHTML = tagged.map(t => {
+    const pct = ((t.seconds / total) * 100).toFixed(0);
+    return `<span style="display:flex;align-items:center;gap:3px;font-size:10px;color:#8b949e;"><span style="width:8px;height:8px;border-radius:2px;background:${t.color};flex-shrink:0;"></span>${esc(t.tag)} ${fmt(t.seconds)} <span style="color:#585e6a;">(${pct}%)</span></span>`;
+  }).join('');
+
+  // ⬅ 날짜 체크를 먼저 (breakdownBuilt 리셋이 card build보다 앞서도록)
+  const todayKey = selectedDate;
+  if (todayKey !== cachedDate) {
+    matchCache = {};
+    cachedDate = todayKey;
+    breakdownBuilt = false;
+  }
+
+  // Inline per-tag breakdown — 최초 1회만 빌드 (또는 날짜 변경 시)
+  if (!breakdownBuilt) {
+    breakdown.innerHTML = tagged.map(t => {
+      const pct = ((t.seconds / total) * 100).toFixed(0);
+      return `<div class="tag-breakdown-card" style="background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:5px 8px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:${t.color};flex-shrink:0;"></span>
+        <span style="font-size:12px;font-weight:600;color:#c9d1d9;">${esc(t.tag)}</span>
+        <span style="font-size:12px;font-weight:500;color:${t.color};">${fmt(t.seconds)}</span>
+        <span style="font-size:10px;color:#585e6a;">(${pct}%)</span>
+      </div>
+      <div id="tag-apps-${cssId(t.tag)}" class="tag-apps-list"></div>
+    </div>`;
+    }).join('');
+    breakdownBuilt = true;
+  } else {
+    // 이후 리프레시: 시간 숫자만 업데이트
+    breakdown.querySelectorAll('.tag-breakdown-card').forEach(card => {
+      const tagName = card.querySelector('span:nth-child(2)')?.textContent;
+      if (!tagName) return;
+      const s = tagged.find(t => t.name === tagName);
+      if (!s) return;
+      const sp = card.querySelector('span:nth-child(3)');
+      const pctEl = card.querySelector('span:nth-child(4)');
+      if (sp) sp.textContent = fmt(s.seconds);
+      const totalPct = ((s.seconds / total) * 100).toFixed(0);
+      if (pctEl) pctEl.textContent = `(${totalPct}%)`;
+    });
+  }
+
+  // (all-matches는 loadTags에서 미리 로드, 여기서는 fetch 안 함)
+  }
+
+  function renderAppList(listEl, matches, color) {
+    // 이미 렌더링된 경우 스킵
+    if (listEl.children.length > 0 && listEl.dataset.rendered) return;
+    if (!matches || matches.length === 0) {
+      listEl.innerHTML = '<div style="padding:2px 0;color:#585e6a;font-size:10px;">매칭 없음</div>';
+      listEl.dataset.rendered = '1';
+      return;
+    }
+    // Group by app, sum durations
+    const appMap = {};
+    matches.forEach(m => {
+      const key = m.app || '(기타)';
+      if (!appMap[key]) appMap[key] = { app: key, seconds: 0 };
+      appMap[key].seconds += (m.seconds || m.duration || 0);
+    });
+    const apps = Object.values(appMap).sort((a,b) => b.seconds - a.seconds);
+    const maxAppSecs = apps[0]?.seconds || 1;
+    listEl.innerHTML = apps.map(a => {
+      const apct = (a.seconds / maxAppSecs) * 100;
+      return `<div style="display:flex;align-items:center;gap:5px;padding:1px 0;font-size:10px;">
+        <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8b949e;">${esc(a.app)}</div>
+        <div style="width:60px;height:6px;background:#21262d;border-radius:3px;overflow:hidden;flex-shrink:0;">
+          <div style="width:${apct}%;height:100%;background:${color};border-radius:3px;"></div>
+        </div>
+        <span style="color:#c9d1d9;min-width:32px;text-align:right;font-family:monospace;">${fmt(a.seconds)}</span>
+      </div>`;
+    }).join('');
+    listEl.dataset.rendered = '1';
+  }
+
+function findCatById(nodes, id) {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    if (n.children) { const f = findCatById(n.children, id); if (f) return f; }
+  }
+  return null;
+}
+
+function cssId(name) {
+  return 'cat-' + name.replace(/[^a-zA-Z0-9\uAC00-\uD7AF-]/g, '_').substring(0, 40);
+}
+
+async function loadTags() {
+  try {
+    // 한 번에 3개 API를 모두 병렬 호출
+    const [tagsRes, statsRes, allRes] = await Promise.all([
+      fetch('/api/categories'),
+      fetch('/api/tag-stats' + dateParam()),
+      fetch('/api/category-all-matches')
+    ]);
+    tagsData = await tagsRes.json();
+    statsData = await statsRes.json();
+    const allData = await allRes.json();
+
+    // 1. 오늘 활동 브레이크다운 (renderTodayBreakdown 내부에서 matchCache 리셋됨)
+    renderTodayBreakdown(statsData);
+    // 2. all-matches는 renderTodayBreakdown 이후에 설정 (리셋 방지)
+    matchCache['__all__'] = allData || {};
+    // 2. 각 카드에 all-matches 결과 분배
+    for (const [cidStr, info] of Object.entries(matchCache['__all__'])) {
+      const cat = findCatById(tagsData, parseInt(cidStr));
+      if (!cat) continue;
+      const listEl = document.getElementById(`tag-apps-${cssId(cat.name)}`);
+      if (!listEl) continue;
+      renderAppList(listEl, info.matches || [], info.color || '#58a6ff');
+    }
+    // 3. 카테고리 목록 + 상태
+    renderMiniCategoryList();
+    document.getElementById('tag-status').textContent = `${countNodes(tagsData)}개 카테고리`;
+
+  } catch(e) { console.error('loadTags:', e); }
+  window._tagLoaded = true;
+}
+
+// 3초 리프레시용 — stats만 업데이트, 카드 건드리지 않음
+async function refreshTagStats() {
+  try {
+    const res = await fetch('/api/tag-stats' + dateParam());
+    const fresh = await res.json();
+    if (!fresh || fresh.length === 0) return;
+    statsData = fresh;
+    const el = document.getElementById('tag-today-bar');
+    const legend = document.getElementById('tag-today-legend');
+    if (!el || !legend) return;
+    const tagged = fresh.filter(s => s.tag !== '__untagged__');
+    const total = tagged.reduce((s, t) => s + (t.seconds || 0), 0);
+    if (total < 1) return;
+    // 🔹 막대 segment 업데이트 — innerHTML 사용 안 함
+    const segs = el.children;
+    if (segs.length === tagged.length) {
+      // 기존 노드 재활용
+      for (let i = 0; i < tagged.length; i++) {
+        const t = tagged[i];
+        const pct = (t.seconds / total) * 100;
+        segs[i].style.flex = pct;
+        segs[i].style.background = t.color;
+        segs[i].textContent = pct > 12 ? t.tag + ' ' + fmt(t.seconds) : t.tag;
+        segs[i].title = t.tag + ' ' + fmt(t.seconds);
+      }
+    } else {
+      // 세그먼트 개수가 달라졌으면 어쩔 수 없이 innerHTML
+      el.innerHTML = tagged.map(t => {
+        const pct = (t.seconds / total) * 100;
+        const label = pct > 12 ? esc(t.tag) + ' ' + fmt(t.seconds) : esc(t.tag);
+        return `<div style="flex:${pct};background:${t.color};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;min-width:0;overflow:hidden;white-space:nowrap;text-shadow:0 1px 2px #00000066;" title="${esc(t.tag)} ${fmt(t.seconds)}">${label}</div>`;
+      }).join('');
+    }
+    // 🔹 범례 업데이트 — innerHTML 사용 안 함
+    const legItems = legend.children;
+    if (legItems.length === tagged.length) {
+      for (let i = 0; i < tagged.length; i++) {
+        const t = tagged[i];
+        const pct = ((t.seconds / total) * 100).toFixed(0);
+        const dot = legItems[i].querySelector('span:first-child');
+        if (dot) dot.style.background = t.color;
+        // 텍스트 노드 업데이트: [dot] name time (pct%)
+        const textNodes = [];
+        legItems[i].childNodes.forEach(n => {
+          if (n.nodeType === 3) textNodes.push(n);
+        });
+        // 첫번째 텍스트노드 = name + space
+        if (textNodes[0]) textNodes[0].textContent = t.tag + ' ';
+        // 두번째 텍스트노드 뒤 = time (pct%)
+        const timeSpan = legItems[i].querySelector('span:last-child');
+        if (timeSpan) timeSpan.textContent = `(${pct}%)`;
+        // timeSpan 바로 앞의 텍스트가 fmt(t.seconds)
+        if (textNodes[1]) textNodes[1].textContent = fmt(t.seconds) + ' ';
+      }
+    } else {
+      legend.innerHTML = tagged.map(t => {
+        const pct = ((t.seconds / total) * 100).toFixed(0);
+        return `<span style="display:flex;align-items:center;gap:3px;font-size:10px;color:#8b949e;"><span style="width:8px;height:8px;border-radius:2px;background:${t.color};flex-shrink:0;"></span>${esc(t.tag)} ${fmt(t.seconds)} <span style="color:#585e6a;">(${pct}%)</span></span>`;
+      }).join('');
+    }
+    // 🔹 카드 내 시간 텍스트 갱신
+    document.querySelectorAll('.tag-breakdown-card').forEach(card => {
+      const nameEl = card.querySelector('span:nth-child(2)');
+      if (!nameEl) return;
+      const tagName = nameEl.textContent;
+      const s = tagged.find(t => t.name === tagName);
+      if (!s) return;
+      const sp = card.querySelector('span:nth-child(3)');
+      const pctEl = card.querySelector('span:nth-child(4)');
+      if (sp) sp.textContent = fmt(s.seconds);
+      const totalPct = ((s.seconds / total) * 100).toFixed(0);
+      if (pctEl) pctEl.textContent = `(${totalPct}%)`;
+    });
+  } catch(e) { /* 조용히 */ }
+}
+
+function openCategoriesPopup() {
+  const feat = 'width=550,height=520,scrollbars=yes,resizable=yes';
+  window.open('/static/categories.html', 'categories', feat);
+}
+
+/* ── 미니 카테고리 목록 (시간 포함, 계층형) ── */
+function renderMiniCategoryList() {
+  // statsData에서 카테고리별 시간 lookup
+  const timeMap = {};
+  for (const s of statsData) {
+    timeMap[s.tag] = s.seconds;
+  }
+
+  function renderNode(nodes, depth) {
+    return nodes.map(t => {
+      const secs = timeMap[t.name] || 0;
+      const tagColor = t.color;
+      const hasKids = t.children && t.children.length > 0;
+      const isGroup = hasKids || (!t.regex || t.regex === '');
+      const indent = depth * 12;
+      return `
+        <div class="tag-mgmt-item" style="padding:4px 6px;padding-left:${indent + 8}px;">
+          <span class="tag-mgmt-color" style="background:${tagColor};width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>
+          <span class="tag-mgmt-name" style="font-size:13px;flex:none;min-width:50px;${isGroup ? 'font-weight:600;' : ''}">${esc(t.name)}</span>
+          <span class="tag-app-time" style="font-size:13px;color:${tagColor};margin-right:4px;">${fmt(secs)}</span>
+          <span style="font-size:10px;color:#585e6a;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.regex || (hasKids ? '' : '그룹'))}</span>
+        </div>
+        ${hasKids ? renderNode(t.children, depth + 1) : ''}
+      `;
+    }).join('');
+  }
+
+  document.getElementById('tag-cat-mini').innerHTML = renderNode(tagsData, 0);
+
+  // 미분류 시간도 표시
+  const untaggedSecs = statsData.find(s => s.tag === '__untagged__')?.seconds || 0;
+  if (untaggedSecs > 0) {
+    document.getElementById('tag-cat-mini').insertAdjacentHTML('beforeend',
+      `<div class="tag-mgmt-item" style="padding:4px 6px 4px 8px;opacity:0.5;">
+        <span style="width:8px;height:8px;border-radius:50%;background:#8b949e;flex-shrink:0;"></span>
+        <span style="font-size:13px;flex:none;min-width:40px;color:#8b949e;">❓ 미분류</span>
+        <span style="font-size:13px;color:#8b949e;font-weight:600;">${fmt(untaggedSecs)}</span>
+      </div>`
+    );
+  }
+}
+
+
+
 /* ═══════════ 뽀모도로 ═══════════ */
 let pomo = {
   state: 'idle', // idle | work | break
@@ -833,7 +1269,7 @@ function pomoRender() {
 }
 
 /* ═══════════ 새로고침 ═══════════ */
-function refresh() { loadHome(); }
+function refresh() { refreshAll(); }
 initDatePicker();
 refresh();
 setInterval(refresh, 3000);

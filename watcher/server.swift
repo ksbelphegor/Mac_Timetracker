@@ -3,6 +3,7 @@ import Network
 import UniformTypeIdentifiers
 import ImageIO
 import AppKit
+import os
 
 // MARK: - HTTP Server (NWListener)
 
@@ -11,6 +12,7 @@ class HTTPServer {
     var listener: NWListener?
     let queue = DispatchQueue(label: "http-server", qos: .background)
     let db = Database.shared
+    let logger = Logger(subsystem: "com.jsk.mactimetracker", category: "server")
 
     private let staticDir: String
 
@@ -30,13 +32,13 @@ class HTTPServer {
 
     func start() {
         guard let listener = try? NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!) else {
-            print("HTTP server: failed to start on port \(port)")
+            self.logger.error("HTTP server: failed to start on port \(self.port)")
             return
         }
         self.listener = listener
         listener.stateUpdateHandler = { state in
-            if case .ready = state { print("HTTP server: ready on :\(self.port)") }
-            if case .failed(let err) = state { print("HTTP server: failed - \(err)") }
+            if case .ready = state { self.logger.log("HTTP server: ready on :\(self.port)") }
+            if case .failed(let err) = state { self.logger.error("HTTP server: failed - \(err)") }
         }
         listener.newConnectionHandler = { [weak self] conn in
             conn.start(queue: self?.queue ?? .global())
@@ -201,14 +203,64 @@ class HTTPServer {
         if path == "/api/now" && req.method == "GET" {
             return handleNow(req)
         }
+        if path == "/api/categories" && req.method == "GET" {
+            return handleGetCategories(req)
+        }
+        if path == "/api/categories" && req.method == "POST" {
+            return handleCreateCategory(req)
+        }
+        if path.hasPrefix("/api/categories/") && req.method == "PATCH" {
+            let prefix = "/api/categories/"
+            let idStr = String(path.dropFirst(prefix.count)).removingPercentEncoding ?? ""
+            if let id = Int64(idStr) { return handleUpdateCategory(req, id: id) }
+            return .json(400, ["error": "Invalid id"])
+        }
+        if path.hasPrefix("/api/categories/") && req.method == "DELETE" {
+            let prefix = "/api/categories/"
+            let idStr = String(path.dropFirst(prefix.count)).removingPercentEncoding ?? ""
+            if let id = Int64(idStr) { return handleDeleteCategory(id: id) }
+            return .json(400, ["error": "Invalid id"])
+        }
+        if path.hasPrefix("/api/category-matches/") && req.method == "GET" {
+            let idStr = String(path.dropFirst("/api/category-matches/".count))
+            if let id = Int64(idStr) { return handleCategoryMatches(id: id) }
+            return .json(400, ["error": "Invalid id"])
+        }
+        if path == "/api/category-all-matches" && req.method == "GET" {
+            return handleCategoryAllMatches()
+        }
+        if path == "/api/untagged-pairs" && req.method == "GET" {
+            return handleUntaggedPairs(req)
+        }
+        if path == "/api/rules" && req.method == "POST" {
+            return handleCreateRule(req)
+        }
+        if path.hasPrefix("/api/rules/") && req.method == "PATCH" {
+            let idStr = String(path.dropFirst("/api/rules/".count))
+            if let id = Int64(idStr) { return handleUpdateRule(req, id: id) }
+            return .json(400, ["error": "Invalid id"])
+        }
+        if path.hasPrefix("/api/rules/") && req.method == "DELETE" {
+            let idStr = String(path.dropFirst("/api/rules/".count))
+            if let id = Int64(idStr) { return handleDeleteRule(id: id) }
+            return .json(400, ["error": "Invalid id"])
+        }
+        if path == "/api/tag-stats" && req.method == "GET" {
+            return handleTagStats(req)
+        }
+        if path == "/api/tag-weekly" && req.method == "GET" {
+            return handleTagWeekly(req)
+        }
         if path.hasPrefix("/api/sessions/") && req.method == "GET" {
-            let appName = String(path.dropFirst(14))
-                .removingPercentEncoding ?? String(path.dropFirst(14))
+            let prefix = "/api/sessions/"
+            let appName = String(path.dropFirst(prefix.count))
+                .removingPercentEncoding ?? String(path.dropFirst(prefix.count))
             return handleAppSessions(req, appName: appName)
         }
         if path.hasPrefix("/api/app-icon/") && req.method == "GET" {
-            let appName = String(path.dropFirst(14))
-                .removingPercentEncoding ?? String(path.dropFirst(14))
+            let prefix = "/api/app-icon/"
+            let appName = String(path.dropFirst(prefix.count))
+                .removingPercentEncoding ?? String(path.dropFirst(prefix.count))
             return handleAppIcon(appName: appName)
         }
 
@@ -218,7 +270,8 @@ class HTTPServer {
             return .file(indexPath)
         }
         if path.hasPrefix("/static/") {
-            let relPath = String(path.dropFirst(8))
+            let staticPrefix = "/static/"
+            let relPath = String(path.dropFirst(staticPrefix.count))
             let filePath = (staticDir as NSString).appendingPathComponent(relPath)
             // Path traversal 방어: 실제 경로가 staticDir 내부에 있는지 확인
             let resolved = (filePath as NSString).standardizingPath
@@ -310,6 +363,111 @@ class HTTPServer {
             "url": data["url"] as Any,
             "since": last["timestamp"] as Any
         ])
+    }
+
+    // MARK: - Categories API
+
+    private func handleGetCategories(_ req: Request) -> Response {
+        return .json(200, db.getCategories())
+    }
+
+    private func handleCreateCategory(_ req: Request) -> Response {
+        guard let body = req.body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let name = (json["name"] as? String)?.trimmingCharacters(in: .whitespaces),
+              !name.isEmpty else {
+            return .json(400, ["error": "Missing name"])
+        }
+        let color = json["color"] as? String ?? "#58a6ff"
+        let regex = json["regex"] as? String ?? ""
+        let parentId = json["parent_id"] as? Int64
+        let score = json["score"] as? Int ?? 0
+        if let id = db.createCategory(name: name, color: color, regex: regex, parentId: parentId, score: score) {
+            return .json(201, ["id": id, "status": "created"])
+        }
+        return .json(500, ["error": "Create failed"])
+    }
+
+    private func handleUpdateCategory(_ req: Request, id: Int64) -> Response {
+        guard let body = req.body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let name = (json["name"] as? String)?.trimmingCharacters(in: .whitespaces),
+              !name.isEmpty else {
+            return .json(400, ["error": "Missing name"])
+        }
+        let color = json["color"] as? String ?? "#58a6ff"
+        let regex = json["regex"] as? String ?? ""
+        let parentId = json["parent_id"] as? Int64
+        let sortOrder = json["sort_order"] as? Int ?? 0
+        let score = json["score"] as? Int ?? 0
+        db.updateCategory(id: id, name: name, color: color, regex: regex, parentId: parentId, sortOrder: sortOrder, score: score)
+        return .json(200, ["status": "ok"])
+    }
+
+    private func handleDeleteCategory(id: Int64) -> Response {
+        db.deleteCategory(id: id)
+        return .json(200, ["status": "ok"])
+    }
+
+    private func handleCategoryMatches(id: Int64) -> Response {
+        let matches = db.getCategoryMatches(id: id)
+        return .json(200, matches)
+    }
+
+    private func handleCategoryAllMatches() -> Response {
+        let allMatches = db.getAllCategoryMatches()
+        return .json(200, allMatches)
+    }
+
+    private func handleUntaggedPairs(_ req: Request) -> Response {
+        let pairs = db.getUntaggedPairs()
+        return .json(200, pairs)
+    }
+
+    // MARK: - Rules API
+
+    private func handleCreateRule(_ req: Request) -> Response {
+        guard let body = req.body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let categoryId = json["category_id"] as? Int64,
+              let pattern = (json["pattern"] as? String)?.trimmingCharacters(in: .whitespaces),
+              !pattern.isEmpty else {
+            return .json(400, ["error": "Missing category_id or pattern"])
+        }
+        let ci = json["case_insensitive"] as? Bool ?? true
+        if let id = db.createRule(categoryId: categoryId, pattern: pattern, caseInsensitive: ci) {
+            return .json(201, ["id": id, "status": "created"])
+        }
+        return .json(500, ["error": "Create failed"])
+    }
+
+    private func handleUpdateRule(_ req: Request, id: Int64) -> Response {
+        guard let body = req.body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let pattern = (json["pattern"] as? String)?.trimmingCharacters(in: .whitespaces),
+              !pattern.isEmpty else {
+            return .json(400, ["error": "Missing pattern"])
+        }
+        let ci = json["case_insensitive"] as? Bool ?? true
+        db.updateRule(id: id, pattern: pattern, caseInsensitive: ci)
+        return .json(200, ["status": "ok"])
+    }
+
+    private func handleDeleteRule(id: Int64) -> Response {
+        db.deleteRule(id: id)
+        return .json(200, ["status": "ok"])
+    }
+
+    // MARK: - Tag Stats
+
+    private func handleTagStats(_ req: Request) -> Response {
+        let stats = db.getTagStats(targetDate: req.query["target_date"])
+        return .json(200, stats)
+    }
+
+    private func handleTagWeekly(_ req: Request) -> Response {
+        let weekly = db.getWeeklyTagStats()
+        return .json(200, weekly)
     }
 
     private func handleAppSessions(_ req: Request, appName: String) -> Response {

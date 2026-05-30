@@ -23,7 +23,8 @@ elif [ "watcher/app.swift" -nt "$APP_BINARY" ] || \
      [ "watcher/database.swift" -nt "$APP_BINARY" ] || \
      [ "watcher/main.swift" -nt "$APP_BINARY" ] || \
      [ "watcher/Info.plist" -nt "$APP_BINARY" ] || \
-     [ "dashboard/static/index.html" -nt "$APP_BINARY" ]; then
+     [ "dashboard/static/index.html" -nt "$APP_BINARY" ] || \
+     [ "dashboard/static/categories.html" -nt "$APP_BINARY" ]; then
     NEED_BUILD=true
 fi
 

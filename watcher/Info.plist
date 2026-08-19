@@ -16,5 +16,9 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>창 제목과 브라우저 URL을 수집하기 위해 브라우저(Safari/Chrome/Brave 등)에 AppleScript를 발송해야 합니다.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>활성 창의 제목을 추적하기 위해 손쉬운 사용 권한이 필요합니다.</string>
 </dict>
 </plist>

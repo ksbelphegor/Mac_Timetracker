@@ -3,6 +3,7 @@
 
 # Build artifacts
 *.app
+Mac Time Tracker.app/
 legacy/build/
 legacy/dist/
 build/

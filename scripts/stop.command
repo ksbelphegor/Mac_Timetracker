@@ -6,13 +6,13 @@ echo "=========================================="
 echo "  Mac Time Tracker 종료"
 echo "=========================================="
 
-PID=$(ps aux | grep "MacTT$" | grep -v grep | awk '{print $2}')
+PID=$(pgrep -x "MacTT" 2>/dev/null | tr '\n' ' ')
 if [ -n "$PID" ]; then
     echo ""
     echo "⏱ MacTT 종료 중... (PID: $PID)"
     kill $PID 2>/dev/null
     sleep 1
-    PID=$(ps aux | grep "MacTT$" | grep -v grep | awk '{print $2}')
+    PID=$(pgrep -x "MacTT" 2>/dev/null | tr '\n' ' ')
     [ -n "$PID" ] && kill -9 $PID 2>/dev/null
     echo "✅ 종료됨"
 else

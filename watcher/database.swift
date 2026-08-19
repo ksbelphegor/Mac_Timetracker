@@ -7,6 +7,8 @@ class Database {
     static let shared = Database()
     var db: OpaquePointer?
     let dbPath: String
+    /// 단일 connection SQLite는 thread-safe가 아님 — 모든 접근에 lock
+    private let dbLock = NSLock()
 
     private init() {
         dbPath = (FileManager.default.homeDirectoryForCurrentUser.path
@@ -18,10 +20,22 @@ class Database {
     }
 
     deinit {
-        if let db = db { sqlite3_close(db) }
+        close()
+    }
+
+    /// 명시적 close + WAL checkpoint (앱 종료 시 권장)
+    func close() {
+        dbLock.lock()
+        defer { dbLock.unlock() }
+        guard let db = db else { return }
+        sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil)
+        sqlite3_close(db)
+        self.db = nil
     }
 
     private func open() {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         guard sqlite3_open(dbPath, &db) == SQLITE_OK else {
             print("DB open failed: \(dbPath)")
             db = nil
@@ -160,7 +174,15 @@ class Database {
 
     // MARK: - API
 
-    private let skipApps: Set<String> = ["loginwindow", "WindowServer", "SystemUIServer", "Dock", "Spotlight", "NotificationCenter"]
+    private let skipApps: Set<String> = [
+        "loginwindow", "WindowServer", "SystemUIServer", "Dock", "Spotlight", "NotificationCenter"
+    ]
+    /// 부분 문자열으로 스킵 (title=app fallback으로 넣히는 앱 포괄)
+    private let skipAppSubstrings: [String] = ["시크릿 모드", "(로딩 중)", "(로그인)"]
+    private func isSkipped(_ app: String) -> Bool {
+        if skipApps.contains(app) { return true }
+        return skipAppSubstrings.contains(where: { app.contains($0) })
+    }
     private let browserApps: Set<String> = ["Brave Browser", "Google Chrome", "Safari", "Firefox",
         "Microsoft Edge", "Arc", "Orion", "Opera", "Opera GX", "Vivaldi", "Tor Browser",
         "네이버 웨일", "Whale", "시크릿 모드"]
@@ -219,8 +241,11 @@ class Database {
                   let app = data["app"] else { continue }
             let ts = r["timestamp"] as? Double ?? 0
             let dur = r["duration"] as? Double ?? 0
-            let hour = String(format: "%02d:00", Int(Date(timeIntervalSince1970: ts).timeIntervalSince1970 / 3600) % 24)
-            hourly[hour, default: [:]][app, default: 0] += dur
+            // local timezone 시간대 (기존 버저: UTC 기반 → 한국 시간대 1~8시가 00:00에 모두 몰림)
+            let cal = Calendar.current
+            let hour = cal.component(.hour, from: Date(timeIntervalSince1970: ts))
+            let hourStr = String(format: "%02d:00", hour)
+            hourly[hourStr, default: [:]][app, default: 0] += dur
         }
         return hourly
     }
@@ -297,7 +322,7 @@ class Database {
             guard let dataStr = e["data"] as? String,
                   let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String] else { continue }
             let app = data["app"] ?? "Unknown"
-            if skipApps.contains(app) { continue }
+            if isSkipped(app) { continue }
             let title = data["title"] ?? ""
             let dur = e["duration"] as? Double ?? 0
             appDict[app, default: 0] += dur
@@ -314,7 +339,7 @@ class Database {
             guard let dataStr = e["data"] as? String,
                   let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String] else { continue }
             let app = data["app"] ?? ""
-            if !skipApps.contains(app) {
+            if !isSkipped(app) {
                 currentApp = app
                 currentTitle = data["title"]
                 break
@@ -325,8 +350,10 @@ class Database {
     }
 
     private func todayISO() -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withFullDate]
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar.current
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: Date())
     }
 
@@ -544,6 +571,7 @@ class Database {
         var pairMap: [String: (app: String, title: String, duration: Double)] = [:]
         for row in rows {
             let app = row["app"] as? String ?? ""
+            if isSkipped(app) { continue }
             let title = row["title"] as? String ?? ""
             let dur = row["duration"] as? Double ?? 0
             let target = "\(app) \(title)".lowercased()
@@ -617,6 +645,7 @@ class Database {
 
         for row in rows {
             let app = row["app"] as? String ?? ""
+            if isSkipped(app) { continue }
             let title = row["title"] as? String ?? ""
             let dur = row["duration"] as? Double ?? 0
             let target = "\(app) \(title)".lowercased()
@@ -685,7 +714,8 @@ class Database {
             sqlite3_bind_double(stmt, 1, start)
             sqlite3_bind_double(stmt, 2, end)
         }
-        return rows
+        // 부분 문자열 스킵 (SQL NOT IN으로는 대체 불가)
+        return rows.filter { !isSkipped($0["app"] as? String ?? "") }
     }
 
     // MARK: - Tag Stats (regex-based)
@@ -709,6 +739,7 @@ class Database {
         var pairMap: [String: (app: String, title: String, dur: Double)] = [:]
         for r in rows {
             let app = r["app"] as? String ?? ""
+            if isSkipped(app) { continue } // 부분 문자열 스킵은 코드에서 처리
             let title = r["title"] as? String ?? ""
             let dur = r["duration"] as? Double ?? 0
             let key = "\(app)|||\(title)"
@@ -743,11 +774,13 @@ class Database {
 
     func getWeeklyTagStats() -> [[String: Any]] {
         let cal = Calendar.current
+        let formatter = DateFormatter()
+        formatter.calendar = cal
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
         var result: [[String: Any]] = []
         for dayOffset in (0..<7).reversed() {
             guard let day = cal.date(byAdding: .day, value: -dayOffset, to: Date()) else { continue }
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withFullDate]
             let dateStr = formatter.string(from: day)
             let dayName: String
             let weekday = cal.component(.weekday, from: day)

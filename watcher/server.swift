@@ -16,8 +16,15 @@ class HTTPServer {
 
     private let staticDir: String
 
-    // 앱 아이콘 캐시 { 앱이름: PNG Data }
-    private var iconCache = NSCache<NSString, NSData>()
+    // 앱 아이콘 캐시 { 앱이름: PNG Data } — thread-safe 보장을 위해 별도 lock
+    private let iconCache = NSCache<NSString, NSData>()
+    private let iconCacheLock = NSLock()
+    // NSCache의 totalCostLimit: byte-cost 기반
+    private func initIconCache() {
+        iconCacheLock.lock()
+        iconCache.countLimit = 200  // 객체 개수 상한
+        iconCacheLock.unlock()
+    }
 
     init(port: UInt16 = 8000) {
         self.port = port
@@ -28,6 +35,7 @@ class HTTPServer {
             let scriptDir = ((#file as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
             staticDir = (scriptDir as NSString).appendingPathComponent("dashboard/static")
         }
+        initIconCache()
     }
 
     func start() {
@@ -98,9 +106,37 @@ class HTTPServer {
             }
         }
 
-        // Naive body extraction (split by \r\n\r\n)
-        let parts = raw.components(separatedBy: "\r\n\r\n")
-        let body: Data? = parts.count >= 2 ? parts.dropFirst().joined(separator: "\r\n\r\n").data(using: .utf8) : nil
+        // 헤더 파싱 (Content-Length로 body length 정확히 파악)
+        var contentLength: Int? = nil
+        for i in 1..<min(lines.count, 32) {
+            let line = lines[i]
+            if line.isEmpty { break }
+            if let colon = line.firstIndex(of: ":") {
+                let key = line[line.startIndex..<colon].lowercased()
+                let val = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+                if key == "content-length" { contentLength = Int(val) }
+            }
+        }
+
+        let body: Data?
+        if let len = contentLength, len > 0 {
+            // 헤더 뒤 \r\n\r\n 이후로부터 len byte를 정확히 잘라낸다
+            if let sepIdx = raw.range(of: "\r\n\r\n") {
+                let bodyStart = raw.index(sepIdx.upperBound, offsetBy: 0)
+                let totalLen = raw.distance(from: raw.startIndex, to: raw.endIndex)
+                let take = min(len, totalLen - raw.distance(from: raw.startIndex, to: bodyStart))
+                if take <= 0 { body = Data() } else {
+                    let bodyEnd = raw.index(bodyStart, offsetBy: take)
+                    body = String(raw[bodyStart..<bodyEnd]).data(using: .utf8)
+                }
+            } else {
+                body = nil
+            }
+        } else {
+            // Content-Length가 없으면 naive fallback
+            let parts = raw.components(separatedBy: "\r\n\r\n")
+            body = parts.count >= 2 ? parts.dropFirst().joined(separator: "\r\n\r\n").data(using: .utf8) : nil
+        }
 
         return Request(method: method.uppercased(), path: fullPath, query: query, body: body)
     }
@@ -151,7 +187,9 @@ class HTTPServer {
         }
 
         static func file(_ path: String) -> Response {
-            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            let url = URL(fileURLWithPath: path)
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let data = try? Data(contentsOf: url) else {
                 return .json(404, ["error": "Not Found"])
             }
             let ext = (path as NSString).pathExtension.lowercased()
@@ -167,8 +205,21 @@ class HTTPServer {
             case "ico": mime = "image/x-icon"
             default: mime = "application/octet-stream"
             }
-            return Response(status: 200, headers: ["Content-Type": mime,
-                "Cache-Control": "no-cache, no-store, must-revalidate"], body: data)
+            var headers: [String: String] = ["Content-Type": mime]
+            // HTML: 매 요청 검증(노출 바꾸면) + ETag
+            // 정적 자원은 mtime 기반 ETag + 1h 캐시
+            if let mtime = attrs[.modificationDate] as? Date {
+                let etag = "\(Int(mtime.timeIntervalSince1970))-\(data.count)"
+                headers["ETag"] = etag
+                if ext == "html" {
+                    headers["Cache-Control"] = "no-cache"
+                } else {
+                    headers["Cache-Control"] = "max-age=3600" + (ext == "js" || ext == "css" ? ", public" : "")
+                }
+            } else {
+                headers["Cache-Control"] = ext == "html" ? "no-cache" : "max-age=3600"
+            }
+            return Response(status: 200, headers: headers, body: data)
         }
     }
 
@@ -487,9 +538,11 @@ class HTTPServer {
     }
 
     private func iconData(for appName: String) -> Data? {
-        // Cache check
+        // Cache check (lock으로 thread-safe)
         let key = appName.lowercased() as NSString
-        if let cached = iconCache.object(forKey: key) { return cached as Data }
+        iconCacheLock.lock()
+        if let cached = iconCache.object(forKey: key) { iconCacheLock.unlock(); return cached as Data }
+        iconCacheLock.unlock()
 
         // 한글 시스템 앱 → 영문 번들명 매핑 (fullPath가 한글명을 못 찾는 경우 대비)
         let engFallback: [String: String] = [
@@ -572,7 +625,9 @@ class HTTPServer {
 
         // 유효한 아이콘만 캐시 (너무 작으면 기본 문서 아이콘 → 무시)
         if let d = pngData, d.count > 200 {
+            iconCacheLock.lock()
             iconCache.setObject(d as NSData, forKey: key)
+            iconCacheLock.unlock()
             return d
         }
         return nil

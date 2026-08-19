@@ -297,9 +297,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             repeats: true) { [weak self] _ in self?.heartbeatTick() }
         statsTimer = Timer.scheduledTimer(withTimeInterval: Config.statsRefreshInterval,
             repeats: true) { [weak self] _ in self?.checkServer() }
-        Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
-            self?.checkServer()
-        }
     }
 
     // MARK: - Window Title
@@ -323,33 +320,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var title = ""
         var url = ""
 
-        // 1. CGWindow API (Core Graphics — instant, no permissions needed, works for all apps)
+        // 1. CGWindow API (Core Graphics — instant, no permissions needed)
         title = cgWindowTitle(pid: app.processIdentifier)
 
-        // 2. Browser AppleScript — only for URL capture + title fallback if CGWindow missed
+        // 2. Browser AppleScript — URL은 비동기로 수집 (브라우저 슬로우 시 UI 블로킹 방지)
         if let script = Config.browserScripts[name] {
-            let output = runViaOSA(script)
-            if let sepRange = output.range(of: "|TITLEURL|") {
-                // AppleScript got both title and URL — use its title (more accurate for browser tabs)
-                title = String(output[output.startIndex..<sepRange.lowerBound])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                url = String(output[sepRange.upperBound...])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            } else if title.isEmpty {
-                // AppleScript failed or returned no separator, CGWindow also failed
-                title = output
+            // CGWindow에 이미 title이 있고 URL도 valid 한다면 → 종료
+            if !title.isEmpty, !windowURL.isEmpty, cachedAppName == name {
+                return title
             }
-            // else: CGWindow already has title, AppleScript failed — keep CGWindow title
+            // 비동기 수집 - 완료 시 state 업데이트
+            if title.isEmpty || windowURL.isEmpty {
+                let pid = app.processIdentifier
+                runViaOSAAsync(script) { [weak self] output in
+                    guard let self = self else { return }
+                    DispatchQueue.main.async {
+                        // 앱이 이미 바뀐 경우 (콜백 두절 방지)
+                        guard self.currentPID == pid, self.cachedAppName == name else { return }
+                        var t = self.windowTitle
+                        var u = self.windowURL
+                        if let sepRange = output.range(of: "|TITLEURL|") {
+                            t = String(output[output.startIndex..<sepRange.lowerBound])
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            u = String(output[sepRange.upperBound...])
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                        } else if t.isEmpty {
+                            t = output
+                        }
+                        self.windowTitle = t
+                        self.windowURL = u
+                        self.cachedAppName = name
+                        self.windowTitleTime = Date()
+                    }
+                }
+            }
         }
 
-        // 3. Firefox special handling (no URL via AppleScript, CGWindow may miss it)
+        /// 창 제목 갱신: stale인 경우 only, 동기 fallback (브라우저 페이지 로드등)
         if title.isEmpty, name == "Firefox" {
-            title = runViaOSA("tell application \"System Events\" to tell process \"firefox\" to get title of window 1")
+            title = runViaOSASync("tell application \"System Events\" to tell process \"firefox\" to get title of window 1")
         }
 
         // 4. System Events via displayed name (handles localizedName != process name)
         if title.isEmpty {
-            title = runViaOSA(
+            title = runViaOSASync(
                 "tell application \"System Events\" to tell (first process whose displayed name is \"\(name)\") to get title of window 1")
         }
 
@@ -389,6 +403,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return name
     }
 
+    /// 비동기 osascript (브라우저 슬로우/랜저 시 UI 메인터 블로킹 방지).
+    /// timeoutSec 이후로는 완료 콜백은 호출 안 함 (경우의 다 매콜백에는 안전성 보장).
+    ///동기 osascript (permissions check처럼 복귀가 안전한 경로만)
     func runViaOSA(_ script: String) -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -400,18 +417,59 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try process.run()
             process.waitUntilExit()
-            if process.terminationStatus != 0 {
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                if let errStr = String(data: errData, encoding: .utf8), !errStr.isEmpty {
-                    logger.error("osascript err: \(errStr)")
-                }
-                return ""
-            }
+            if process.terminationStatus != 0 { return "" }
             let data = outPipe.fileHandleForReading.readDataToEndOfFile()
             return String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         } catch {
             return ""
+        }
+    }
+
+    /// 동기 오작스퍼스치스는 경쟁을 줄이기 위해 0.4초 Timeout (성공 시 즉시 복귀)
+    func runViaOSASync(_ script: String) -> String {
+        var result = ""
+        let sem = DispatchSemaphore(value: 0)
+        runViaOSAAsync(script, timeoutSec: 0.4) { result = $0; sem.signal() }
+        _ = sem.wait(timeout: .now() + 0.5)
+        return result
+    }
+
+    func runViaOSAAsync(_ script: String, timeoutSec: TimeInterval = 0.8, completion: @escaping (String) -> Void) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        do {
+            try process.run()
+        } catch {
+            completion("")
+            return
+        }
+        let logger = self.logger // copy (Logger는 value type)
+        DispatchQueue.global(qos: .utility).async {
+            let deadline = Date().addingTimeInterval(timeoutSec)
+            while process.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if process.isRunning {
+                process.terminate()
+                return completion("")
+            }
+            if process.terminationStatus != 0 {
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                if let errStr = String(data: errData, encoding: .utf8), !errStr.isEmpty {
+                    logger.error("osascript err: \(errStr)")
+                }
+                return completion("")
+            }
+            let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+            let str = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            completion(str)
         }
     }
 
@@ -513,6 +571,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func quitApp(_ sender: Any?) {
         stopServer()
+        Database.shared.close()  // 명시적 close + WAL checkpoint
         if let obs = notificationObserver {
             workspace.notificationCenter.removeObserver(obs)
         }

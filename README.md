@@ -120,6 +120,35 @@ cd Mac_Timetracker
 
 ## 변경 이력
 
+### 2026-06-11 — 성능/정합성 일괄 리팩터링
+
+**타임존 버그 수정** (`watcher/database.swift`)
+- `getHourlyBreakdown`이 UTC 기준으로 floor → 1~8시가 `00:00`에 모두 몰리는 문제.
+  `Calendar.current.component(.hour)`로 로컬 시간대로 교정.
+- `parseDate`/`todayISO`/`getWeeklyTagStats`가 `ISO8601DateFormatter +09:00` 하드코딩 →
+  `DateFormatter` + `Locale en_US_POSIX` + local calendar로 대체. 해외 출장 등 TZ 변경에 안전.
+
+**스레드 안전성** (`watcher/*.swift`)
+- `Database`: 단일 connection SQLite → `NSLock`으로 모든 접근 serial화. 읽기중 레코드 쓰기 race 방지.
+- `quitApp()`: `Database.shared.close()` 명시적 호출 + `PRAGMA wal_checkpoint(TRUNCATE)`.
+  `kill -9` 시 WAL 정합성 위험 감소.
+- `HTTPServer.iconCache`: `NSCache.countLimit=200` + `NSLock` (server queue + main thread 동시 read/write)
+- `runViaOSAAsync`: osascript 비동기 (브라우저 슬로우 시 UI 3s 블로킹 방지), 0.8s timeout.
+  `getWindowTitle()`에서 브라우저 URL은 비동기 수집. Firefox/AX fallback은 sync (0.4s cap).
+- 데드 샤스나 부가기타 on-shot timer 제거 (statsTimer 60s + separate 3s 중복 제거).
+
+**HTTP 서버** (`watcher/server.swift`)
+- 정적 자원 캐시: HTML `Cache-Control: no-cache` + `ETag`, JS/CSS/PNG `max-age=3600` + `ETag`
+  (기존: 모두 `no-cache` → 매 3s poll마다 index.html 재전송).
+- `parseRequest`가 `Content-Length`로 body 정확 추출 (기존 naive `\r\n\r\n` split은 한글 제목 etc 특수 문자로 깨질 수 있음).
+
+** 기타 **
+- `Info.plist`: `NSAppleEventsUsageDescription` + `NSAccessibilityUsageDescription` 추가.
+  (OS가 권한 프롬프트를 요구할 때 설명이 없으면 거부될 수 있음)
+- `scripts/stop.command`: `ps aux | grep MacTT$` (한/타일 오일) → `pgrep -x MacTT`
+- `.gitignore`: `Mac Time Tracker.app/` 명시 (기존 `*.app`가 long-name 번들을 놓침)
+- `Database`: skip app에 `시크릿 모드`/`(로딩 중)` 등 partial-match 스킵 추가 (title=app fallback으로 유입되는 앱 통각)
+
 ### 2026-05-21 — 사이트 분류 정밀화 + 캐시 오염 수정
 
 **사이트 분류 (`extractGroupName` in `dashboard/static/index.html`)**

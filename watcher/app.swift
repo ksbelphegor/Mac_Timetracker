@@ -60,6 +60,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // AX dialog
     var axPromptShown = false
+    var screenRecPromptShown = false
+    var permissionCheckDone = false
 
     // HTTP session (no cache for heartbeats)
     private lazy var httpSession: URLSession = {
@@ -102,15 +104,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkServer()
         startTimers()
 
-        // AX check
+        // 권한 check (AX + Screen Recording)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.checkAccessibilityPermission()
+            self?.checkPermissions()
         }
         axObserver = workspace.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            self?.checkAccessibilityPermission()
+            self?.checkPermissions()
         }
     }
 
@@ -203,7 +205,76 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return bindResult != 0  // bind failed = port in use
     }
 
-    // MARK: - Accessibility
+    // MARK: - Permission Check (AX + Screen Recording)
+
+    func checkPermissions() {
+        guard !permissionCheckDone else { return }
+        permissionCheckDone = true
+        // 1. Accessibility
+        if AXIsProcessTrusted() {
+            logger.notice("✅ AX 권한 있음")
+        } else {
+            let osaWorks = runViaOSA("tell application \"System Events\" to get name of every process")
+            if !osaWorks.isEmpty {
+                logger.notice("✅ AX 권한 없지만 osascript fallback 사용 가능")
+            } else {
+                logger.warning("⚠️ AX 권한 없음 — 다이얼로그 (1회)")
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, !self.axPromptShown else { return }
+                    self.axPromptShown = true
+                    self.showAccessibilityPrompt()
+                }
+            }
+        }
+        // 2. Screen Recording
+        if !isScreenRecordingPermissionGranted() {
+            logger.warning("⚠️ 스크린 레코딩 권한 없음 — 다이얼로그 (1회)")
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, !self.screenRecPromptShown else { return }
+                self.screenRecPromptShown = true
+                self.showScreenRecordingPrompt()
+            }
+        }
+    }
+
+    /// probe: CGWindowListCreateImage 실행 결과로 권한 판단. nil = 권한 없음 (prompt 트리거).
+    /// probe: 창 정보 읽기 시도 (kCGWindowName). 권한 없으면 empty name.
+    /// macOS 10.15+ 권한이 없으면 read가 항상 ""으로, 이걸로 판단.
+    private func isScreenRecordingPermissionGranted() -> Bool {
+        // frontmost app의 PID로 창 목록 읽고, 이름이 있는지
+        guard let app = workspace.frontmostApplication,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        let frontPid = Int(app.processIdentifier)
+        let namedCount = list.filter {
+            ($0[kCGWindowOwnerPID as String] as? Int) == frontPid
+            && !($0[kCGWindowName as String] as? String ?? "").isEmpty
+        }.count
+        return namedCount > 0
+    }
+
+    func showScreenRecordingPrompt() {
+        let alert = NSAlert()
+        alert.messageText = "🎥 스크린 레코딩 권한 필요"
+        alert.informativeText = "Mac Time Tracker가 다른 앱의 창 제목을 읽으려면 스크린 레코딩 권한이 필요합니다.\n\n"
+            + "1. 시스템 설정 → 개인정보 보호 및 보안 → 스크린 레코딩\n"
+            + "2. Mac Time Tracker.app 추가 (➕ 버튼)\n"
+            + "3. 체크박스 활성화\n\n"
+            + "권한 추가 후 Mac Time Tracker를 재시작하세요.\n"
+            + "(브라우저 URL은 권한 없이도 읽을 수 있습니다.)"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "시스템 설정 열기")
+        alert.addButton(withTitle: "나중에")
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    // MARK: - Accessibility (legacy: osascript check)
 
     func checkAccessibilityPermission() {
         if AXIsProcessTrusted() {
@@ -318,7 +389,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         var title = ""
-        var url = ""
+        let url = ""
 
         // 1. CGWindow API (Core Graphics — instant, no permissions needed)
         title = cgWindowTitle(pid: app.processIdentifier)

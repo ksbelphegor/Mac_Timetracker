@@ -913,10 +913,10 @@ function renderTodayBreakdown(stats) {
     return `<div style="flex:${pct};background:${t.color};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;min-width:0;overflow:hidden;white-space:nowrap;text-shadow:0 1px 2px #00000066;" title="${esc(t.tag)} ${fmt(t.seconds)}">${label}</div>`;
   }).join('');
 
-  // Legend
+  // Legend — 이름 + 퍼센트만 (시간은 카드/막대 title에 이미 있음)
   legend.innerHTML = tagged.map(t => {
     const pct = ((t.seconds / total) * 100).toFixed(0);
-    return `<span style="display:flex;align-items:center;gap:3px;font-size:10px;color:#8b949e;"><span style="width:8px;height:8px;border-radius:2px;background:${t.color};flex-shrink:0;"></span>${esc(t.tag)} ${fmt(t.seconds)} <span style="color:#585e6a;">(${pct}%)</span></span>`;
+    return `<span style="display:flex;align-items:center;gap:3px;font-size:10px;color:#8b949e;"><span style="width:8px;height:8px;border-radius:2px;background:${t.color};flex-shrink:0;"></span>${esc(t.tag)} <span style="color:#585e6a;">(${pct}%)</span></span>`;
   }).join('');
 
   // ⬅ 날짜 체크를 먼저 (breakdownBuilt 리셋이 card build보다 앞서도록)
@@ -1111,7 +1111,7 @@ async function refreshTagStats() {
         const pct = ((t.seconds / total) * 100).toFixed(0);
         const item = document.createElement('span');
         item.style.cssText = 'display:flex;align-items:center;gap:3px;font-size:10px;color:#8b949e;';
-        item.innerHTML = `<span style="width:8px;height:8px;border-radius:2px;background:${t.color};flex-shrink:0;"></span>${esc(t.tag)} ${fmt(t.seconds)} <span style="color:#585e6a;">(${pct}%)</span>`;
+        item.innerHTML = `<span style="width:8px;height:8px;border-radius:2px;background:${t.color};flex-shrink:0;"></span>${esc(t.tag)} <span style="color:#585e6a;">(${pct}%)</span>`;
         item._prevSecs = t.seconds;
         legend.appendChild(item);
       }
@@ -1130,9 +1130,8 @@ async function refreshTagStats() {
       const textNodes = [];
       legItem.childNodes.forEach(n => { if (n.nodeType === 3) textNodes.push(n); });
       if (textNodes[0]) textNodes[0].textContent = t.tag + ' ';
-      const timeSpan = legItem.querySelector('span:last-child');
-      if (timeSpan) timeSpan.textContent = `(${pct}%)`;
-      if (textNodes[1]) textNodes[1].textContent = fmt(t.seconds) + ' ';
+      const pctSpan = legItem.querySelector('span:last-child');
+      if (pctSpan) pctSpan.textContent = `(${pct}%)`;
       legItem._prevSecs = t.seconds;
     }
     // 🔹 카드 내 시간 텍스트 갱신 — dirty check (flashes 방지)

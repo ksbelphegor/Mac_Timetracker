@@ -313,17 +313,71 @@ class HTTPServer {
         }
     }
 
-    // MARK: - Router
+    // MARK: - Permissions (대시보드 설정 패널)
+
+    private func handlePermissionsStatus(_ req: Request) -> Response {
+        guard let app = NSApp.delegate as? AppDelegate else {
+            return .json(200, ["screen_recording": false, "accessibility": false, "all_ok": false, "checked_at": 0, "app_found": false])
+        }
+        let s = app.permissionSnapshot
+        return .json(200, [
+            "screen_recording": s.sr,
+            "accessibility": s.ax,
+            "all_ok": s.sr && s.ax,
+            "checked_at": Int(s.at.timeIntervalSince1970),
+            "app_found": true
+        ])
+    }
+
+    private func handlePermissionsAction(_ req: Request) -> Response {
+        guard let app = NSApp.delegate as? AppDelegate else {
+            return .json(503, ["error": "App delegate unavailable"])
+        }
+        let action = req.query["action"] ?? "check"
+        let which = req.query["which"] ?? ""
+        switch action {
+        case "check":
+            // Silent 재확인 (프롬프트 없음) — 결과 반영은 60s 모니터/다음 폴링에서
+            DispatchQueue.main.async { app.refreshPermissionStatus() }
+        case "prompt":
+            // 시스템 TCC 프롬프트 표시 (사용자 명시적 요청)
+            app.promptForPermission(which)
+        case "settings":
+            // 시스템 설정 개인정보 보호 패널 열기
+            DispatchQueue.main.async { app.openSettingsPane(which) }
+        default:
+            return .json(400, ["error": "Unknown action: \(action)"])
+        }
+        let s = app.permissionSnapshot
+        return .json(200, [
+            "triggered": true,
+            "screen_recording": s.sr,
+            "accessibility": s.ax,
+            "all_ok": s.sr && s.ax,
+            "checked_at": Int(s.at.timeIntervalSince1970)
+        ])
+    }
+
+    // MARK: - Router (API handlers)
 
     private func processRequest(_ req: Request) -> Response {
         let path = req.path
 
         // API Routes
+        if path == "/api/ping" && req.method == "GET" {
+            return .json(200, ["ok": true])
+        }
         if path == "/api/heartbeat" && req.method == "POST" {
             return handleHeartbeat(req)
         }
         if path == "/api/today" && req.method == "GET" {
             return handleToday(req)
+        }
+        if path == "/api/permissions" && req.method == "GET" {
+            return handlePermissionsStatus(req)
+        }
+        if path == "/api/permissions" && req.method == "POST" {
+            return handlePermissionsAction(req)
         }
         if path == "/api/recent" && req.method == "GET" {
             return handleRecent(req)

@@ -64,6 +64,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var screenRecPromptShown = false
     var permissionCheckDone = false
 
+    // 🔐 권한 상태 스냅샷 (대시보드 설정 패널용 — lock으로 thread-safe)
+    private let permLock = NSLock()
+    private var permSR = false
+    private var permAX = false
+    private var permCheckedAt = Date.distantPast
+    var permissionSnapshot: (sr: Bool, ax: Bool, at: Date) {
+        permLock.lock(); defer { permLock.unlock() }
+        return (permSR, permAX, permCheckedAt)
+    }
+    var permMonitorTimer: Timer?
+
     // osascript 에러 로그 rate-limit (권한 없음 시 3s마다 스팸 방지)
     private final class OsaErrGate {
         private let lock = NSLock()
@@ -118,15 +129,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkServer()
         startTimers()
 
-        // 권한 check (AX + Screen Recording)
+        // 권한 check (AX + Screen Recording) + 실시간 상태 모니터 (60s silent recheck)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.checkPermissions()
+            self?.startPermissionMonitor()
         }
         axObserver = workspace.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            self?.checkPermissions()
+            // 사용자가 시스템 설정에서 권한 토글 → Silent 재확인 (재시작 불필요)
+            self?.refreshPermissionStatus()
         }
     }
 
@@ -223,45 +236,142 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Permission Check (AX + Screen Recording)
 
+    /// 🔐 권한 상태 알림 규칙 — "1회성 부여"를 위한 게이트:
+    /// - 첫 실행(상태 미기록) 또는 부여→차단 변화일 때만 alert
+    /// - 이미 '없음'으로 알고 있으면 매 launch마다 재확인·재알림하지 않음
+    ///   (대시보드 설정 패널에서 상태 확인/요청 가능)
     func checkPermissions() {
         guard !permissionCheckDone else { return }
         permissionCheckDone = true
-        let axOK: Bool
-        if AXIsProcessTrusted() {
-            logger.notice("✅ AX 권한 있음")
-            axOK = true
-        } else {
-            let osaWorks = runViaOSA("tell application \"System Events\" to get name of every process")
-            if !osaWorks.isEmpty {
-                logger.notice("✅ AX 권한 없지만 osascript fallback 사용 가능")
-                axOK = true
-            } else {
-                axOK = false
-            }
-        }
-        let scrOK = isScreenRecordingPermissionGranted()
 
-        // 순서대로 (AX → ScreenRec) — 동시에 2 alert 뗐시경우 user가 판별 불가
-        if !axOK {
-            logger.warning("⚠️ AX 권한 없음")
+        let sr = screenRecordingSilentCheck()
+        let ax = AXIsProcessTrusted()
+        let d = UserDefaults.standard
+        let prevSR = d.object(forKey: "permState.sr") as? Bool
+        let prevAX = d.object(forKey: "permState.ax") as? Bool
+        d.set(sr, forKey: "permState.sr")
+        d.set(ax, forKey: "permState.ax")
+        updatePermissionSnapshot(sr: sr, ax: ax)
+
+        let srChanged = (prevSR == nil) || (prevSR == true && sr == false)
+        let axChanged = (prevAX == nil) || (prevAX == true && ax == false)
+        if srChanged || axChanged {
+            logger.warning("⚠️ 권한 상태 확인 필요 (변화/첫실행): SR=\(sr) AX=\(ax)")
             DispatchQueue.main.async { [weak self] in
-                guard let self = self, !self.axPromptShown else { return }
-                self.axPromptShown = true
-                self.showAccessibilityPrompt()
-                // AX alert 닫힌 뒤, screen-rec도 없으면 이어서
-                if !scrOK, !self.screenRecPromptShown {
+                guard let self = self else { return }
+                // 순서: AX → ScreenRec (기존과 동일)
+                if axChanged {
+                    self.axPromptShown = true
+                    self.showAccessibilityPrompt()
+                    if srChanged, !self.screenRecPromptShown {
+                        self.screenRecPromptShown = true
+                        self.showScreenRecordingPrompt()
+                    }
+                } else if srChanged, !self.screenRecPromptShown {
                     self.screenRecPromptShown = true
                     self.showScreenRecordingPrompt()
                 }
             }
-        } else if !scrOK {
-            logger.warning("⚠️ 스크린 레코딩 권한 없음")
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self, !self.screenRecPromptShown else { return }
-                self.screenRecPromptShown = true
-                self.showScreenRecordingPrompt()
+        } else if sr && ax {
+            logger.notice("✅ 권한 모두 정상 (Silent)")
+        }
+    }
+
+    /// 🔐 권한을 명시적으로 요청 (대시보드 설정 패널의 '권한 요청' 버튼)
+    /// → 시스템 TCC 프롬프트가 뜨도록 실제 API 호출
+    @objc func promptForPermission(_ which: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            switch which {
+            case "screenrecording":
+                if self.screenRecordingSilentCheck() {
+                    self.logger.log("SR 이미 허용됨")
+                    return
+                }
+                if #available(macOS 12.3, *) {
+                    NSApp.activate(ignoringOtherApps: true)
+                    NSApp.setActivationPolicy(.regular)
+                    SCShareableContent.getWithCompletionHandler { [weak self] _, _ in
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            NSApp.setActivationPolicy(.accessory)
+                            self?.refreshPermissionStatus()
+                        }
+                    }
+                }
+            case "accessibility":
+                if AXIsProcessTrusted() { return }
+                let opts = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+                AXIsProcessTrustedWithOptions(opts)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    self.refreshPermissionStatus()
+                }
+            default: break
             }
         }
+    }
+
+    /// 시스템 설정 개인정보 보호 패널 열기
+    func openSettingsPane(_ which: String) {
+        let path: String
+        switch which {
+        case "screenrecording": path = "Privacy_ScreenCapture"
+        case "accessibility": path = "Privacy_Accessibility"
+        default: path = "Privacy"
+        }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(path)") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    // MARK: - Silent Permission Monitor (프롬프트 없이 상태 감지)
+
+    /// 🔐 스크린 레코딩 권한 Silent probe — 절대 시스템 프롬프트를 트리거하지 않음.
+    /// 다른 프로세스의 창 이름은 SR 권한 없으면 redact(빈 값)되므로,
+    /// 전역 on-screen 창 중 '자기 자신 제외' 어느 창이든 이름이 있으면 허용으로 간주.
+    /// (기존 frontmost-only probe는 frontmost가 창 없는 앱일 때 false negative)
+    func screenRecordingSilentCheck() -> Bool {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
+              !list.isEmpty else { return false }
+        let myPid = ProcessInfo.processInfo.processIdentifier
+        for w in list {
+            guard let owner = w[kCGWindowOwnerPID as String] as? Int, owner != myPid else { continue }
+            if let name = w[kCGWindowName as String] as? String, !name.isEmpty {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 권한 상태를 조용히 다시 확인 (프롬프트 없음). 부여→자동 반영, 재시작 불필요.
+    func refreshPermissionStatus() {
+        let sr = screenRecordingSilentCheck()
+        let ax = AXIsProcessTrusted()
+        let changed = updatePermissionSnapshot(sr: sr, ax: ax)
+        if changed {
+            logger.notice("🔐 권한 상태 변경 감지 (실시간): SR=\(sr) AX=\(ax)")
+        }
+    }
+
+    @discardableResult
+    private func updatePermissionSnapshot(sr: Bool, ax: Bool) -> Bool {
+        permLock.lock(); defer { permLock.unlock() }
+        let changed = (permSR != sr) || (permAX != ax)
+        permSR = sr
+        permAX = ax
+        permCheckedAt = Date()
+        return changed
+    }
+
+    /// 60초마다 Silent 재확인 — 사용자가 시스템 설정에서 부여하면 자동 반영
+    func startPermissionMonitor() {
+        refreshPermissionStatus()
+        permMonitorTimer?.invalidate()
+        let t = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            self?.refreshPermissionStatus()
+        }
+        // common 모드: modal/alert 켜져 있는 동안에도 유지
+        RunLoop.main.add(t, forMode: .common)
+        permMonitorTimer = t
     }
 
     /// probe: CGWindowListCreateImage 실행 결과로 권한 판단. nil = 권한 없음 (prompt 트리거).
@@ -343,8 +453,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             + "1. 시스템 설정 → 개인정보 보호 및 보안 → 스크린 레코딩\n"
             + "2. Mac Time Tracker.app 추가 (➕ 버튼)\n"
             + "3. 체크박스 활성화\n\n"
-            + "권한 추가 후 Mac Time Tracker를 재시작하세요.\n"
-            + "(브라우저 URL은 권한 없이도 읽을 수 있습니다.)"
+            + "✅ 부여 후 재시작할 필요 없습니다 — 최대 1분 내 자동 감지됩니다.\n"
+            + "(대시보드 ⚙️ 설정에서 상태 확인 가능)"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "시스템 설정 열기")
         alert.addButton(withTitle: "나중에")
@@ -360,26 +470,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Accessibility (legacy: osascript check)
-
-    func checkAccessibilityPermission() {
-        if AXIsProcessTrusted() {
-            logger.notice("✅ AX 권한 있음 (직접 AX API 사용)")
-            return
-        }
-        let osaWorks = runViaOSA("tell application \"System Events\" to get name of every process")
-        if !osaWorks.isEmpty {
-            logger.notice("✅ AX 권한 없지만 osascript fallback 사용 가능")
-            return
-        }
-        logger.warning("⚠️ AX 권한 없음 — 다이얼로그 표시 (1회만)")
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self, !self.axPromptShown else { return }
-            self.axPromptShown = true
-            self.showAccessibilityPrompt()
-        }
-    }
-
     func showAccessibilityPrompt() {
         let alert = NSAlert()
         alert.messageText = "🔒 Accessibility 권한 필요"
@@ -387,7 +477,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             + "1. 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용\n"
             + "2. Mac Time Tracker.app 추가 (➕ 버튼)\n"
             + "3. 체크박스 활성화\n\n"
-            + "권한 추가 후 Mac Time Tracker를 재시작하세요."
+            + "✅ 부여 후 재시작할 필요 없습니다 — 최대 1분 내 자동 감지됩니다.\n"
+            + "(대시보드 ⚙️ 설정에서 상태 확인 가능)"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "시스템 설정 열기")
         alert.addButton(withTitle: "나중에")
@@ -517,18 +608,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         /// 창 제목 갱신: stale인 경우 only, 동기 fallback (브라우저 페이지 로드등)
-        if title.isEmpty, name == "Firefox" {
+        // 🔐 AX(손쉬운 사용) 권한이 없으면 System Events/AX fallback은 실패만 보장 —
+        // 메인 스레드 동기 osascript(최대 수 초 블로킹) + 최초 자동화 프롬프트 방지
+        let axTrusted = AXIsProcessTrusted()
+        if title.isEmpty, name == "Firefox", axTrusted {
             title = runViaOSASync("tell application \"System Events\" to tell process \"firefox\" to get title of window 1")
         }
 
         // 4. System Events via displayed name (handles localizedName != process name)
-        if title.isEmpty {
+        if title.isEmpty, axTrusted {
             title = runViaOSASync(
                 "tell application \"System Events\" to tell (first process whose displayed name is \"\(name)\") to get title of window 1")
         }
 
         // 5. AX API as ultimate fallback (needs AX trust, usually not needed)
-        if title.isEmpty {
+        if title.isEmpty, axTrusted {
             title = axWindowTitle(pid: app.processIdentifier)
         }
 

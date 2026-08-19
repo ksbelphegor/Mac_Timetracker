@@ -40,6 +40,14 @@
   }
   .tab-btn:hover { color:#c9d1d9; }
   .tab-btn.active { color:#58a6ff; border-bottom-color:#58a6ff; }
+  /* ── 권한 설정 ── */
+  #perm-gear { padding:8px 12px; position:relative; }
+  #perm-dot { display:none; position:absolute; top:4px; right:2px; background:#f85149; color:#fff;
+    font-size:9px; border-radius:8px; padding:1px 4px; line-height:1.2; }
+  .perm-row { display:flex; align-items:center; gap:8px; padding:9px 0; border-top:1px solid #21262d; }
+  .perm-row:first-of-type { border-top:none; }
+  .perm-state-ok { color:#3fb950; font-size:11px; }
+  .perm-state-missing { color:#d29922; font-size:11px; }
   .tab-content { display:none; flex:1; min-height:0; }
   .tab-content.active { display:flex; flex-direction:column; }
   /* ── 홈 탭 ── */
@@ -334,6 +342,34 @@
   <button class="tab-btn" data-tab="browser" onclick="switchTab('browser')">🌐 브라우저</button>
   <button class="tab-btn" data-tab="tags" onclick="switchTab('tags')">🏷 태그</button>
   <button class="tab-btn" data-tab="work" onclick="switchTab('work')">🍅 작업</button>
+  <span style="flex:1"></span>
+  <button id="perm-gear" class="tab-btn" onclick="togglePermPanel()" title="권한 설정">⚙️<span id="perm-dot">!</span></button>
+</div>
+
+<!-- ══════ 권한 설정 패널 ══════ -->
+<div id="perm-panel" style="display:none;background:#161b22;border:1px solid #30363d;border-radius:12px;padding:12px 16px;margin-bottom:12px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+    <b>🔐 권한 상태</b>
+    <span id="perm-updated" style="font-size:11px;color:#8b949e;"></span>
+  </div>
+  <div class="perm-row">
+    <span style="width:16px;text-align:center;">🎥</span>
+    <div style="flex:1;font-size:13px;">스크린 레코딩 <span style="font-size:11px;color:#8b949e;">(모든 앱 창 제목) · <span id="perm-sr-state"></span></span></div>
+    <button class="date-btn" onclick="permAction('prompt','screenrecording')">권한 요청</button>
+    <button class="date-btn" onclick="permAction('settings','screenrecording')">시스템 설정</button>
+  </div>
+  <div class="perm-row">
+    <span style="width:16px;text-align:center;">♿</span>
+    <div style="flex:1;font-size:13px;">손쉬운 사용 <span style="font-size:11px;color:#8b949e;">(비브라우저 창 제목 fallback) · <span id="perm-ax-state"></span></span></div>
+    <button class="date-btn" onclick="permAction('prompt','accessibility')">권한 요청</button>
+    <button class="date-btn" onclick="permAction('settings','accessibility')">시스템 설정</button>
+  </div>
+  <div class="perm-row" style="align-items:flex-start;">
+    <span style="width:16px;text-align:center;padding-top:1px;">ℹ️</span>
+    <div style="flex:1;font-size:11px;color:#8b949e;line-height:1.5;">브라우저 URL은 별도 권한(Automation) 없이 수집되나, 일부 브라우저는 최초 1회 시스템 프롬프트를 표시할 수 있습니다.
+      <br>✅ 부여 후 <b>재시작 불필요</b> — 1분 내 자동 감지됩니다. (60초마다 자동 재확인)</div>
+    <button class="date-btn" onclick="loadPermissions()">↻ 다시 확인</button>
+  </div>
 </div>
 
 <!-- ══════ 홈 탭 ══════ -->
@@ -506,12 +542,69 @@ function goToday() {
 }
 
 function refreshAll() {
-  loadHome();
+  pingServer();
+  if (document.getElementById('tab-home').classList.contains('active')) loadHome();
   if (document.getElementById('tab-browser').classList.contains('active')) loadBrowserSessions();
   if (document.getElementById('tab-tags').classList.contains('active')) {
     if (!window._tagLoaded) return;
     refreshTagStats();
   }
+  if (permPanelOpen) loadPermissions();
+}
+
+/* ═══════════ 서버 연결 상태 (DB 없는 초경량 ping) ═══════════ */
+function pingServer() {
+  const badge = document.getElementById('status-badge');
+  if (!badge) return;
+  fetch('/api/ping').then(r => {
+    badge.innerHTML = r.ok
+      ? `<span class="status-dot status-on"></span>연결됨`
+      : `<span class="status-dot status-off"></span>연결 오류`;
+  }).catch(() => {
+    badge.innerHTML = `<span class="status-dot status-off"></span>연결 오류`;
+  });
+}
+
+/* ═══════════ 권한 설정 패널 ═══════════ */
+let permPanelOpen = false;
+function togglePermPanel() {
+  permPanelOpen = !permPanelOpen;
+  document.getElementById('perm-panel').style.display = permPanelOpen ? 'block' : 'none';
+  if (permPanelOpen) loadPermissions();
+}
+
+async function loadPermissions() {
+  try {
+    const r = await fetch('/api/permissions');
+    if (!r.ok) return;
+    renderPerm(await r.json());
+  } catch (e) { /* 서버 중지 상태 */ }
+}
+
+function renderPerm(p) {
+  const gear = document.getElementById('perm-gear');
+  const dot = document.getElementById('perm-dot');
+  gear.style.opacity = p.app_found ? 1 : 0.4;
+  dot.style.display = p.all_ok ? 'none' : 'inline-block';
+  const set = (id, ok) => {
+    const el = document.getElementById(id);
+    el.textContent = ok ? '✅ 허용됨' : '⚠️ 미부여';
+    el.className = ok ? 'perm-state-ok' : 'perm-state-missing';
+  };
+  set('perm-sr-state', p.screen_recording);
+  set('perm-ax-state', p.accessibility);
+  if (p.checked_at > 0) {
+    document.getElementById('perm-updated').textContent =
+      '확인 ' + new Date(p.checked_at * 1000).toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  }
+}
+
+async function permAction(action, which) {
+  try {
+    await fetch(`/api/permissions?action=${action}&which=${which}`, { method: 'POST' });
+  } catch (e) {}
+  // prompt은 사용자가 시스템 창에서 처리해야 하므로 넉넉히 기다리고 재확인
+  setTimeout(loadPermissions, action === 'prompt' ? 6000 : 1500);
 }
 
 function dateParam() {
@@ -1327,6 +1420,9 @@ function refresh() { refreshAll(); }
 initDatePicker();
 refresh();
 setInterval(refresh, 10000);  // 3s → 10s (flashes 빈도 1/3으로 감소)
+// 권한 상태: 패널 닫혀있어도 30s마다 점(dot) 갱신
+let permTick = 0;
+setInterval(() => { if (++permTick % 3 === 0) loadPermissions(); }, 10000);
 
 // 알림 권한 요청
 if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();

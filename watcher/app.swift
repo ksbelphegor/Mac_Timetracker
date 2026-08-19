@@ -210,25 +210,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func checkPermissions() {
         guard !permissionCheckDone else { return }
         permissionCheckDone = true
-        // 1. Accessibility
+        let axOK: Bool
         if AXIsProcessTrusted() {
             logger.notice("✅ AX 권한 있음")
+            axOK = true
         } else {
             let osaWorks = runViaOSA("tell application \"System Events\" to get name of every process")
             if !osaWorks.isEmpty {
                 logger.notice("✅ AX 권한 없지만 osascript fallback 사용 가능")
+                axOK = true
             } else {
-                logger.warning("⚠️ AX 권한 없음 — 다이얼로그 (1회)")
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self, !self.axPromptShown else { return }
-                    self.axPromptShown = true
-                    self.showAccessibilityPrompt()
-                }
+                axOK = false
             }
         }
-        // 2. Screen Recording
-        if !isScreenRecordingPermissionGranted() {
-            logger.warning("⚠️ 스크린 레코딩 권한 없음 — 다이얼로그 (1회)")
+        let scrOK = isScreenRecordingPermissionGranted()
+
+        // 순서대로 (AX → ScreenRec) — 동시에 2 alert 뗐시경우 user가 판별 불가
+        if !axOK {
+            logger.warning("⚠️ AX 권한 없음")
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, !self.axPromptShown else { return }
+                self.axPromptShown = true
+                self.showAccessibilityPrompt()
+                // AX alert 닫힌 뒤, screen-rec도 없으면 이어서
+                if !scrOK, !self.screenRecPromptShown {
+                    self.screenRecPromptShown = true
+                    self.showScreenRecordingPrompt()
+                }
+            }
+        } else if !scrOK {
+            logger.warning("⚠️ 스크린 레코딩 권한 없음")
             DispatchQueue.main.async { [weak self] in
                 guard let self = self, !self.screenRecPromptShown else { return }
                 self.screenRecPromptShown = true
@@ -266,7 +277,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "시스템 설정 열기")
         alert.addButton(withTitle: "나중에")
+        // LSUIElement (menu bar) app은 frontmost가 될 수 없음 → alert 열기 전 regular로 전환
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.setActivationPolicy(.regular)
         let response = alert.runModal()
+        NSApp.setActivationPolicy(.accessory)
         if response == .alertFirstButtonReturn {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                 NSWorkspace.shared.open(url)
@@ -305,7 +320,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "시스템 설정 열기")
         alert.addButton(withTitle: "나중에")
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.setActivationPolicy(.regular)
         let response = alert.runModal()
+        NSApp.setActivationPolicy(.accessory)
         if response == .alertFirstButtonReturn {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
                 NSWorkspace.shared.open(url)

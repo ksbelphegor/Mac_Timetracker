@@ -62,14 +62,56 @@ class HTTPServer {
 
     // MARK: - Connection handling
 
+    private let maxRequestSize = 1_000_000
+
     private func handle(_ conn: NWConnection) {
+        // 🔒 루프백 전용: LAN(같은 Wi-Fi)의 다른 기기는 대시보드/API에 접근 불가
+        //   (이유: 앱 사용기록·창 제목·URL·규칙이 그대로 노출되므로)
+        if !Self.isLoopback(conn.endpoint) {
+            logger.log("⛔ 접속 거절 (loopback-only): \(conn.endpoint.debugDescription)")
+            conn.cancel()
+            return
+        }
+        pump(conn, buffer: Data())
+    }
+
+    /// 원격 peer가 loopback(127.0.0.1 / ::1 / localhost)인지 확인
+    private static func isLoopback(_ ep: NWEndpoint?) -> Bool {
+        guard let ep else { return false }
+        if case .hostPort(let host, _) = ep {
+            switch host {
+            case .name(let n, _):
+                return ["127.0.0.1", "::1", "localhost"].contains(n)
+            case .ipv4(let a):
+                return a.isLoopback
+            case .ipv6(let a):
+                return a.isLoopback
+            @unknown default:
+                return false
+            }
+        }
+        return false
+    }
+
+    /// 요청 완진(헤더 끝 + Content-Length 만큼 body 수취)될 때까지 receive 반복.
+    /// 일부만 받은 요청으로 400을 답하거나 body를 떨어트리는 문제를 방지.
+    private func pump(_ conn: NWConnection, buffer: Data) {
+        var buffer = buffer
         conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, error in
-            guard let self = self, let data = data, error == nil else {
-                conn.cancel()
+            guard let self = self else { conn.cancel(); return }
+            if let d = data { buffer.append(d) }
+            if buffer.count > self.maxRequestSize {
+                let resp = Response.json(413, ["error": "Payload Too Large"])
+                conn.send(content: resp.data, completion: .contentProcessed { _ in conn.cancel() })
                 return
             }
-            let response = self.processRequest(data)
-            conn.send(content: response.data, completion: .contentProcessed { _ in conn.cancel() })
+            if let req = Self.parseComplete(buffer) {
+                let response = self.processRequest(req)
+                conn.send(content: response.data, completion: .contentProcessed { _ in conn.cancel() })
+                return
+            }
+            if error != nil { conn.cancel(); return }
+            self.pump(conn, buffer: buffer)
         }
     }
 
@@ -82,17 +124,51 @@ class HTTPServer {
         let body: Data?
     }
 
-    private func parseRequest(_ data: Data) -> Request? {
-        guard let raw = String(data: data, encoding: .utf8) else { return nil }
-        let lines = raw.components(separatedBy: "\r\n")
+    /// 버퍼에서 요청을 파싱 (byte 기반 — UTF-8 멀티바이트 안전).
+    /// 헤더 끝(\r\n\r\n)과 Content-Length만큼 body를 모두 받을 때까지 nil 반환 (계속 receive).
+    private static func parseComplete(_ buf: Data) -> Request? {
+        // \r\n\r\n 바이트 시퀀스 탐색
+        let eol: [UInt8] = [0x0d, 0x0a, 0x0d, 0x0a]
+        var headerEnd: Int? = nil
+        if buf.count >= 4 {
+            outer: for i in 0...(buf.count - 4) {
+                for j in 0..<4 where buf[i + j] != eol[j] { continue outer }
+                headerEnd = i + 4
+                break
+            }
+        }
+        guard let hEnd = headerEnd else {
+            return buf.count < 8192 ? nil : parseRaw(buf)  // 비정상적으로 긴 헤더는 마지막에 파싱
+        }
+
+        let headStr = String(data: buf.prefix(hEnd), encoding: .utf8) ?? ""
+        let lines = headStr.components(separatedBy: "\r\n")
         guard lines.count >= 1 else { return nil }
         let requestLine = lines[0].components(separatedBy: " ")
         guard requestLine.count >= 2 else { return nil }
 
+        var contentLength = 0
+        for i in 1..<lines.count {
+            let line = lines[i]
+            if line.isEmpty { break }
+            if let colon = line.firstIndex(of: ":") {
+                let key = line[line.startIndex..<colon].lowercased()
+                let val = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+                if key == "content-length" { contentLength = Int(val) ?? 0 }
+            }
+        }
+        if contentLength > 0, buf.count < hEnd + contentLength { return nil }  // body 도착 중
+
+        let body: Data
+        if contentLength > 0 {
+            body = buf.subdata(in: hEnd..<(hEnd + contentLength))
+        } else {
+            body = Data()
+        }
+
         let method = requestLine[0]
         var fullPath = requestLine[1]
         var query: [String: String] = [:]
-
         if let qIdx = fullPath.firstIndex(of: "?") {
             let qStr = fullPath[qIdx...].dropFirst()
             fullPath = String(fullPath[..<qIdx])
@@ -105,39 +181,53 @@ class HTTPServer {
                 }
             }
         }
+        return Request(method: method.uppercased(), path: fullPath, query: query, body: body)
+    }
 
-        // 헤더 파싱 (Content-Length로 body length 정확히 파악)
-        var contentLength: Int? = nil
+    /// 완진 여부를 모르는(예: 누락된 헤더 끝) 요청을 그대로 파싱
+    private static func parseRaw(_ buf: Data) -> Request? {
+        guard let raw = String(data: buf, encoding: .utf8) else { return nil }
+        let lines = raw.components(separatedBy: "\r\n")
+        guard lines.count >= 1 else { return nil }
+        let requestLine = lines[0].components(separatedBy: " ")
+        guard requestLine.count >= 2 else { return nil }
+
+        var contentLength = 0
+        var headerDone = false
         for i in 1..<min(lines.count, 32) {
             let line = lines[i]
-            if line.isEmpty { break }
+            if line.isEmpty { headerDone = true; break }
             if let colon = line.firstIndex(of: ":") {
                 let key = line[line.startIndex..<colon].lowercased()
                 let val = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
-                if key == "content-length" { contentLength = Int(val) }
+                if key == "content-length" { contentLength = Int(val) ?? 0 }
             }
         }
 
         let body: Data?
-        if let len = contentLength, len > 0 {
-            // 헤더 뒤 \r\n\r\n 이후로부터 len byte를 정확히 잘라낸다
-            if let sepIdx = raw.range(of: "\r\n\r\n") {
-                let bodyStart = raw.index(sepIdx.upperBound, offsetBy: 0)
-                let totalLen = raw.distance(from: raw.startIndex, to: raw.endIndex)
-                let take = min(len, totalLen - raw.distance(from: raw.startIndex, to: bodyStart))
-                if take <= 0 { body = Data() } else {
-                    let bodyEnd = raw.index(bodyStart, offsetBy: take)
-                    body = String(raw[bodyStart..<bodyEnd]).data(using: .utf8)
-                }
-            } else {
-                body = nil
-            }
+        if headerDone, let sepIdx = raw.range(of: "\r\n\r\n") {
+            let bodyHave = raw.distance(from: sepIdx.upperBound, to: raw.endIndex)
+            let take = min(contentLength, bodyHave)
+            body = take > 0 ? String(raw[sepIdx.upperBound...]).prefix(take).data(using: .utf8) : Data()
         } else {
-            // Content-Length가 없으면 naive fallback
-            let parts = raw.components(separatedBy: "\r\n\r\n")
-            body = parts.count >= 2 ? parts.dropFirst().joined(separator: "\r\n\r\n").data(using: .utf8) : nil
+            body = nil
         }
 
+        let method = requestLine[0]
+        var fullPath = requestLine[1]
+        var query: [String: String] = [:]
+        if let qIdx = fullPath.firstIndex(of: "?") {
+            let qStr = fullPath[qIdx...].dropFirst()
+            fullPath = String(fullPath[..<qIdx])
+            for pair in qStr.split(separator: "&") {
+                let kv = pair.split(separator: "=", maxSplits: 1)
+                if kv.count == 2 {
+                    let key = String(kv[0]).removingPercentEncoding ?? String(kv[0])
+                    let val = String(kv[1]).removingPercentEncoding ?? String(kv[1])
+                    query[key] = val
+                }
+            }
+        }
         return Request(method: method.uppercased(), path: fullPath, query: query, body: body)
     }
 
@@ -225,11 +315,7 @@ class HTTPServer {
 
     // MARK: - Router
 
-    private func processRequest(_ data: Data) -> Response {
-        guard let req = parseRequest(data) else {
-            return .json(400, ["error": "Bad Request"])
-        }
-
+    private func processRequest(_ req: Request) -> Response {
         let path = req.path
 
         // API Routes

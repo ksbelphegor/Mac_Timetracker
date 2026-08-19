@@ -559,6 +559,9 @@ function sortArrow(col) {
 }
 
 async function loadHome() {
+  // in-flight 중복 방지 (setInterval 3s + user click race 방지)
+  if (window._homeInFlight) { window._homePending = true; return; }
+  window._homeInFlight = true;
   try {
     const res = await fetch('/api/today' + dateParam());
     const data = await res.json();
@@ -609,6 +612,9 @@ async function loadHome() {
     document.getElementById('status-badge').innerHTML =
       `<span class="status-dot status-off"></span>연결 오류`;
     console.error('loadHome:', e);
+  } finally {
+    window._homeInFlight = false;
+    if (window._homePending) { window._homePending = false; loadHome(); }
   }
 }
 
@@ -875,6 +881,9 @@ async function loadBrowserSessions() {
   } catch(e) {
     statusEl.textContent = '로딩 실패';
     console.error('loadBrowserSessions:', e);
+  } finally {
+    window._browserInFlight = false;
+    if (window._browserPending) { window._browserPending = false; loadBrowserSessions(); }
   }
 }
 
@@ -929,10 +938,20 @@ function renderTodayBreakdown(stats) {
         <span style="font-size:12px;font-weight:500;color:${t.color};">${fmt(t.seconds)}</span>
         <span style="font-size:10px;color:#585e6a;">(${pct}%)</span>
       </div>
-      <div id="tag-apps-${cssId(t.tag)}" class="tag-apps-list"></div>
+      <div id="tag-apps-${cssId(t.tag)}" class="tag-apps-list" data-rendered="0"></div>
     </div>`;
     }).join('');
     breakdownBuilt = true;
+    // Load from cache (loadTags에서 미리 fetch한 __all__ 데이터)
+    if (matchCache['__all__']) {
+      for (const [cidStr, info] of Object.entries(matchCache['__all__'])) {
+        const cat = findCatById(tagsData, parseInt(cidStr));
+        if (!cat) continue;
+        const listEl = document.getElementById(`tag-apps-${cssId(cat.name)}`);
+        if (!listEl) continue;
+        renderAppList(listEl, info.matches || [], info.color || '#58a6ff');
+      }
+    }
   } else {
     // 이후 리프레시: 시간 숫자만 업데이트
     breakdown.querySelectorAll('.tag-breakdown-card').forEach(card => {
@@ -994,6 +1013,9 @@ function cssId(name) {
 }
 
 async function loadTags() {
+  // in-flight dedup (setInterval 3s + user click race 방지)
+  if (window._tagInFlight) { window._tagPending = true; return; }
+  window._tagInFlight = true;
   try {
     // 한 번에 3개 API를 모두 병렬 호출
     const [tagsRes, statsRes, allRes] = await Promise.all([
@@ -1022,11 +1044,16 @@ async function loadTags() {
     document.getElementById('tag-status').textContent = `${countNodes(tagsData)}개 카테고리`;
 
   } catch(e) { console.error('loadTags:', e); }
+  window._tagInFlight = false;
   window._tagLoaded = true;
+  if (window._tagPending) { window._tagPending = false; loadTags(); }
 }
 
 // 3초 리프레시용 — stats만 업데이트, 카드 건드리지 않음
 async function refreshTagStats() {
+  // in-flight dedup (setInterval 3s + loadTags race 방지)
+  if (window._tagRefreshInFlight) return;
+  window._tagRefreshInFlight = true;
   try {
     const res = await fetch('/api/tag-stats' + dateParam());
     const fresh = await res.json();
@@ -1038,67 +1065,95 @@ async function refreshTagStats() {
     const tagged = fresh.filter(s => s.tag !== '__untagged__');
     const total = tagged.reduce((s, t) => s + (t.seconds || 0), 0);
     if (total < 1) return;
-    // 🔹 막대 segment 업데이트 — innerHTML 사용 안 함
+    // 🔹 막대 segment 업데이트 — dirty check (flashes 방지: 1초 미만 변경이면 skip)
     const segs = el.children;
+    let dirty = false;
     if (segs.length === tagged.length) {
-      // 기존 노드 재활용
       for (let i = 0; i < tagged.length; i++) {
         const t = tagged[i];
-        const pct = (t.seconds / total) * 100;
-        segs[i].style.flex = pct;
-        segs[i].style.background = t.color;
-        segs[i].textContent = pct > 12 ? t.tag + ' ' + fmt(t.seconds) : t.tag;
-        segs[i].title = t.tag + ' ' + fmt(t.seconds);
+        const prev = segs[i]._prevSecs;
+        if (prev === undefined || Math.abs(t.seconds - prev) >= 1) { dirty = true; }
       }
     } else {
-      // 세그먼트 개수가 달라졌으면 어쩔 수 없이 innerHTML
-      el.innerHTML = tagged.map(t => {
-        const pct = (t.seconds / total) * 100;
-        const label = pct > 12 ? esc(t.tag) + ' ' + fmt(t.seconds) : esc(t.tag);
-        return `<div style="flex:${pct};background:${t.color};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;min-width:0;overflow:hidden;white-space:nowrap;text-shadow:0 1px 2px #00000066;" title="${esc(t.tag)} ${fmt(t.seconds)}">${label}</div>`;
-      }).join('');
+      dirty = true;  // segs 개수 변경이면 항상 update
     }
-    // 🔹 범례 업데이트 — innerHTML 사용 안 함
+    if (!dirty) { window._tagRefreshInFlight = false; return; }  // 아무 변경도 없으면 DOM 건드리지 않음
+    // in-place: segs append/remove + update
+    if (segs.length < tagged.length) {
+      for (let i = segs.length; i < tagged.length; i++) {
+        const t = tagged[i];
+        const pct = (t.seconds / total) * 100;
+        const seg = document.createElement('div');
+        seg.style.cssText = `flex:${pct};background:${t.color};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;min-width:0;overflow:hidden;white-space:nowrap;text-shadow:0 1px 2px #00000066;`;
+        seg.textContent = pct > 12 ? t.tag + ' ' + fmt(t.seconds) : t.tag;
+        seg.title = t.tag + ' ' + fmt(t.seconds);
+        seg._prevSecs = t.seconds;
+        el.appendChild(seg);
+      }
+    } else if (segs.length > tagged.length) {
+      for (let i = segs.length - 1; i >= tagged.length; i--) segs[i].remove();
+    }
+    for (let i = 0; i < tagged.length; i++) {
+      const t = tagged[i];
+      const pct = (t.seconds / total) * 100;
+      segs[i].style.flex = pct;
+      segs[i].style.background = t.color;
+      segs[i].textContent = pct > 12 ? t.tag + ' ' + fmt(t.seconds) : t.tag;
+      segs[i].title = t.tag + ' ' + fmt(t.seconds);
+      segs[i]._prevSecs = t.seconds;
+    }
+    // 🔹 범례 업데이트 — dirty check (flashes 방지)
     const legItems = legend.children;
-    if (legItems.length === tagged.length) {
-      for (let i = 0; i < tagged.length; i++) {
+    // in-place: legItems append/remove + update
+    if (legItems.length < tagged.length) {
+      for (let i = legItems.length; i < tagged.length; i++) {
         const t = tagged[i];
         const pct = ((t.seconds / total) * 100).toFixed(0);
-        const dot = legItems[i].querySelector('span:first-child');
-        if (dot) dot.style.background = t.color;
-        // 텍스트 노드 업데이트: [dot] name time (pct%)
-        const textNodes = [];
-        legItems[i].childNodes.forEach(n => {
-          if (n.nodeType === 3) textNodes.push(n);
-        });
-        // 첫번째 텍스트노드 = name + space
-        if (textNodes[0]) textNodes[0].textContent = t.tag + ' ';
-        // 두번째 텍스트노드 뒤 = time (pct%)
-        const timeSpan = legItems[i].querySelector('span:last-child');
-        if (timeSpan) timeSpan.textContent = `(${pct}%)`;
-        // timeSpan 바로 앞의 텍스트가 fmt(t.seconds)
-        if (textNodes[1]) textNodes[1].textContent = fmt(t.seconds) + ' ';
+        const item = document.createElement('span');
+        item.style.cssText = 'display:flex;align-items:center;gap:3px;font-size:10px;color:#8b949e;';
+        item.innerHTML = `<span style="width:8px;height:8px;border-radius:2px;background:${t.color};flex-shrink:0;"></span>${esc(t.tag)} ${fmt(t.seconds)} <span style="color:#585e6a;">(${pct}%)</span>`;
+        item._prevSecs = t.seconds;
+        legend.appendChild(item);
       }
-    } else {
-      legend.innerHTML = tagged.map(t => {
-        const pct = ((t.seconds / total) * 100).toFixed(0);
-        return `<span style="display:flex;align-items:center;gap:3px;font-size:10px;color:#8b949e;"><span style="width:8px;height:8px;border-radius:2px;background:${t.color};flex-shrink:0;"></span>${esc(t.tag)} ${fmt(t.seconds)} <span style="color:#585e6a;">(${pct}%)</span></span>`;
-      }).join('');
+    } else if (legItems.length > tagged.length) {
+      for (let i = legItems.length - 1; i >= tagged.length; i--) legItems[i].remove();
     }
-    // 🔹 카드 내 시간 텍스트 갱신
+    for (let i = 0; i < tagged.length; i++) {
+      const t = tagged[i];
+      const pct = ((t.seconds / total) * 100).toFixed(0);
+      const legItem = legend.children[i];
+      if (!legItem) continue;
+      const prev = legItem._prevSecs;
+      if (prev !== undefined && Math.abs(t.seconds - prev) < 1) continue;  // 1초 미만 변경이면 skip
+      const dot = legItem.querySelector('span:first-child');
+      if (dot) dot.style.background = t.color;
+      const textNodes = [];
+      legItem.childNodes.forEach(n => { if (n.nodeType === 3) textNodes.push(n); });
+      if (textNodes[0]) textNodes[0].textContent = t.tag + ' ';
+      const timeSpan = legItem.querySelector('span:last-child');
+      if (timeSpan) timeSpan.textContent = `(${pct}%)`;
+      if (textNodes[1]) textNodes[1].textContent = fmt(t.seconds) + ' ';
+      legItem._prevSecs = t.seconds;
+    }
+    // 🔹 카드 내 시간 텍스트 갱신 — dirty check (flashes 방지)
     document.querySelectorAll('.tag-breakdown-card').forEach(card => {
       const nameEl = card.querySelector('span:nth-child(2)');
       if (!nameEl) return;
       const tagName = nameEl.textContent;
       const s = tagged.find(t => t.name === tagName);
       if (!s) return;
+      const prev = card._prevSecs;
+      if (prev !== undefined && Math.abs(s.seconds - prev) < 1) return;  // 1초 미만 변경이면 skip
       const sp = card.querySelector('span:nth-child(3)');
       const pctEl = card.querySelector('span:nth-child(4)');
       if (sp) sp.textContent = fmt(s.seconds);
       const totalPct = ((s.seconds / total) * 100).toFixed(0);
       if (pctEl) pctEl.textContent = `(${totalPct}%)`;
+      card._prevSecs = s.seconds;
     });
-  } catch(e) { /* 조용히 */ }
+  } catch(e) { /* 조용히 */ } finally {
+    window._tagRefreshInFlight = false;
+  }
 }
 
 function openCategoriesPopup() {
@@ -1272,7 +1327,7 @@ function pomoRender() {
 function refresh() { refreshAll(); }
 initDatePicker();
 refresh();
-setInterval(refresh, 3000);
+setInterval(refresh, 10000);  // 3s → 10s (flashes 빈도 1/3으로 감소)
 
 // 알림 권한 요청
 if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();

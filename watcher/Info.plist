@@ -5,7 +5,7 @@
     <key>CFBundleExecutable</key>
     <string>MacTT</string>
     <key>CFBundleIdentifier</key>
-    <string>com.ksbelphegor.mactimetracker.watcher</string>
+    <string>com.ksbelphegor.mactimetracker</string>
     <key>CFBundleName</key>
     <string>Mac Time Tracker</string>
     <key>CFBundleVersion</key>

@@ -1,6 +1,7 @@
 import Cocoa
 import Foundation
 import ApplicationServices
+import ScreenCaptureKit
 import os
 
 // MARK: - Configuration
@@ -62,6 +63,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var axPromptShown = false
     var screenRecPromptShown = false
     var permissionCheckDone = false
+
+    // osascript 에러 로그 rate-limit (권한 없음 시 3s마다 스팸 방지)
+    private final class OsaErrGate {
+        private let lock = NSLock()
+        private var last = Date.distantPast
+        func allow() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            let now = Date()
+            if now.timeIntervalSince(last) > 120 { last = now; return true }
+            return false
+        }
+    }
+    private let osaErrGate = OsaErrGate()
 
     // HTTP session (no cache for heartbeats)
     private lazy var httpSession: URLSession = {
@@ -141,6 +155,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(pauseMenuItem)
 
         menu.addItem(NSMenuItem(title: "📊 대시보드 열기", action: #selector(openDashboard), keyEquivalent: "d"))
+        menu.addItem(NSMenuItem(title: "🔧 권한 초기화 후 재시작 (SHA mismatch)",
+                                action: #selector(resetAndRelaunchPermissions), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "✕ 종료", action: #selector(quitApp), keyEquivalent: "q"))
     }
@@ -249,20 +265,75 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// probe: CGWindowListCreateImage 실행 결과로 권한 판단. nil = 권한 없음 (prompt 트리거).
-    /// probe: 창 정보 읽기 시도 (kCGWindowName). 권한 없으면 empty name.
-    /// macOS 10.15+ 권한이 없으면 read가 항상 ""으로, 이걸로 판단.
+    /// probe: ScreenCapture 권한 판단. macOS 10.15+에서 다른 app window title/URL
+    /// read는 Screen Recording 권한을 요구 — CGWindowListCreateImage을
+    /// 호출하는 순간 system prompt가 발생. (deprecated 15+ 임에도 permission
+    /// 트리거용으로는 여전히 동작: macOS는 이 호출만 보고 ScreenCapture 권한 확인)
+    /// ScreenCaptureKit (12+)을 이용해서 권한 probe. 한 번 호출하면
+    /// macOS가 이 app이 ScreenCapture 권한을 요구했다고 system TCC DB에 entry 생성 →
+    /// system setting에 list. 10.15~11 fallback은 CGWindowListCreateImage (15+에 unavailable).
     private func isScreenRecordingPermissionGranted() -> Bool {
-        // frontmost app의 PID로 창 목록 읽고, 이름이 있는지
+        if #available(macOS 12.3, *) {
+            return isScreenRecordingPermissionGranted_SCK()
+        } else {
+            return isScreenRecordingPermissionGranted_CGWindow()
+        }
+    }
+
+    @available(macOS 12.3, *)
+    private func isScreenRecordingPermissionGranted_SCK() -> Bool {
+        // SCShareableContent.getWithCompletionHandler — macOS 15+에서
+        // 권한 없으면 system이 NSAlert (prompt) 띄움. 그 NSAlert이
+        // LSUIElement app에서는 frontmost가 못됨 → main runloop block.
+        // 해결: .regular로 전환 (temporarily Dock icon) → NSAlert 정상 → .accessory 복귀
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.setActivationPolicy(.regular)
+        SCShareableContent.getWithCompletionHandler { [weak self] content, error in
+            if let err = error {
+                print("[permission] SCK 권한 없음: \(err.localizedDescription)")
+            } else if let c = content {
+                print("[permission] SCK 허용: windows \(c.windows.count)")
+            }
+            // NSAlert (system prompt) dismiss → 복귀
+            DispatchQueue.main.async {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
+        // 동기 probe: frontmost window name (SCK async이라 방 문제, CGWindow로)
+        return isScreenRecordingPermissionGranted_CGWindow()
+    }
+
+    private func isScreenRecordingPermissionGranted_CGWindow() -> Bool {
         guard let app = workspace.frontmostApplication,
               let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
             return false
         }
         let frontPid = Int(app.processIdentifier)
-        let namedCount = list.filter {
+        let named = list.filter {
             ($0[kCGWindowOwnerPID as String] as? Int) == frontPid
             && !($0[kCGWindowName as String] as? String ?? "").isEmpty
         }.count
-        return namedCount > 0
+        return named > 0
+    }
+
+    /// NSAlert.runModal()은 메인 스레드를 모달 루프에 **영구 블로킹**할 수 있음.
+    /// 모달 루프에서는 메인 dispatch 큐가 drain되지 않으므로,
+    /// 이 기간에 어느 스레드가 main.sync를 기다리면 그 쓰레드가 갇힌다.
+    /// → timeout 시 자동 종료 (RunLoop .common 타이머는 모달 루프에서도 동작).
+    /// timeout 종료는 2번째 버튼('나중에'/'취소')으로 간주.
+    private func runModalSafely(_ alert: NSAlert, timeout: TimeInterval = 90) -> NSApplication.ModalResponse {
+        var autoStopped = false
+        let timer = Timer(fire: Date().addingTimeInterval(timeout), interval: 0, repeats: false) { _ in
+            autoStopped = true
+            NSApp.stopModal()
+        }
+        RunLoop.current.add(timer, forMode: .common)
+        let response = alert.runModal()
+        if autoStopped {
+            timer.invalidate()
+            return .alertSecondButtonReturn
+        }
+        return response
     }
 
     func showScreenRecordingPrompt() {
@@ -280,7 +351,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // LSUIElement (menu bar) app은 frontmost가 될 수 없음 → alert 열기 전 regular로 전환
         NSApp.activate(ignoringOtherApps: true)
         NSApp.setActivationPolicy(.regular)
-        let response = alert.runModal()
+        let response = runModalSafely(alert)
         NSApp.setActivationPolicy(.accessory)
         if response == .alertFirstButtonReturn {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
@@ -322,7 +393,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "나중에")
         NSApp.activate(ignoringOtherApps: true)
         NSApp.setActivationPolicy(.regular)
-        let response = alert.runModal()
+        let response = runModalSafely(alert)
         NSApp.setActivationPolicy(.accessory)
         if response == .alertFirstButtonReturn {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
@@ -539,6 +610,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let logger = self.logger // copy (Logger는 value type)
+        let errGate = self.osaErrGate
         DispatchQueue.global(qos: .utility).async {
             let deadline = Date().addingTimeInterval(timeoutSec)
             while process.isRunning && Date() < deadline {
@@ -550,7 +622,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if process.terminationStatus != 0 {
                 let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                if let errStr = String(data: errData, encoding: .utf8), !errStr.isEmpty {
+                if let errStr = String(data: errData, encoding: .utf8), !errStr.isEmpty,
+                   errGate.allow() {  // 2분 rate-limit (권한 부재 시 3s 폴링마다 스팸)
                     logger.error("osascript err: \(errStr)")
                 }
                 return completion("")
@@ -668,6 +741,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             workspace.notificationCenter.removeObserver(obs)
         }
         NSApplication.shared.terminate(nil)
+    }
+
+    /// 코드 시인 SHA가 build마다 바뀌면 macOS TCC가 거부.
+    /// 매 build 후 사용자편의를 위해 권한 초기화 후 재시작. (user가 수동으로
+    /// system setting에서 재허용하는 번거로움을 줄임)
+    func autoResetTCCAndRelaunch() {
+        let tcc = Process()
+        tcc.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        tcc.arguments = ["reset", "ScreenCapture", "com.ksbelphegor.mactimetracker"]
+        tcc.standardOutput = FileHandle.nullDevice
+        tcc.standardError = FileHandle.nullDevice
+        try? tcc.run()
+        tcc.waitUntilExit()
+        let ax = Process()
+        ax.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        ax.arguments = ["reset", "Accessibility", "com.ksbelphegor.mactimetracker"]
+        ax.standardOutput = FileHandle.nullDevice
+        ax.standardError = FileHandle.nullDevice
+        try? ax.run()
+        ax.waitUntilExit()
+    }
+    @objc func resetAndRelaunchPermissions() {
+        let alert = NSAlert()
+        alert.messageText = "🔧 권한 초기화 후 재시작?"
+        alert.informativeText = "code-sign SHA가 build마다 바뀌면 macOS가 권한을 다시 거부합니다.\n\n"
+            + "tccutil reset으로 초기화 후 재시작 →\n"
+            + "system setting에서 한 번 더 ‘Allow’ 클릭 필요"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "초기화 후 재시작")
+        alert.addButton(withTitle: "취소")
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.setActivationPolicy(.regular)
+        let response = runModalSafely(alert)
+        NSApp.setActivationPolicy(.accessory)
+        if response == .alertFirstButtonReturn {
+            autoResetTCCAndRelaunch()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                let relaunch = Process()
+                relaunch.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                relaunch.arguments = [Bundle.main.bundlePath]
+                try? relaunch.run()
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     // MARK: - Util

@@ -597,31 +597,32 @@ class HTTPServer {
 
             guard let srcIcon = icon else { return }
 
-            // 5. 20x20 PNG로 리사이즈
-            let size = NSSize(width: 20, height: 20)
-            let resized = NSImage(size: size)
-            resized.lockFocusFlipped(false)
-            srcIcon.draw(in: NSRect(origin: .zero, size: size),
-                         from: NSRect(origin: .zero, size: srcIcon.size),
-                         operation: .copy, fraction: 1.0)
-            resized.unlockFocus()
-
-            // 6. PNG 데이터로 변환
-            guard let cgImage = resized.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+            // 5-6. 20x20 PNG로 렌더 — 순수 CoreGraphics (bitmap context)
+            // NSImage.lockFocus(=AppKit 공유 그래픽 상태) 대신 CGContext 사용 →
+            // 어떤 스레드에서든 안전 (메인 스레드 불필요)
+            let size = 20
+            guard let cg = srcIcon.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                  let ctx = CGContext(data: nil, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            ctx.interpolationQuality = .high
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: size, height: size))
+            guard let out = ctx.makeImage() else { return }
             let data = NSMutableData()
             if let dest = CGImageDestinationCreateWithData(data as CFMutableData,
                                                            UTType.png.identifier as CFString, 1, nil) {
-                CGImageDestinationAddImage(dest, cgImage, nil)
+                CGImageDestinationAddImage(dest, out, nil)
                 CGImageDestinationFinalize(dest)
                 pngData = data as Data
             }
         }
 
-        if Thread.isMainThread {
-            loadIcon()
-        } else {
-            DispatchQueue.main.sync { loadIcon() }
-        }
+        // 호출 스레드(http-server serial queue)에서 직접 실행.
+        // ⚠️ DispatchQueue.main.sync 절대 금지: 권한 알림(NSAlert.runModal) 등으로
+        // 메인 스레드가 모달 루프에 갇히면 main 큐가 drain되지 않아 서버 큐가
+        // 영구 데드락 (모든 API 요청 타임아웃 → 대시보드 탭 공백).
+        loadIcon()
 
         // 유효한 아이콘만 캐시 (너무 작으면 기본 문서 아이콘 → 무시)
         if let d = pngData, d.count > 200 {

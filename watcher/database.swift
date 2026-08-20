@@ -34,9 +34,11 @@ class Database {
 
     // ── columnization (data JSON → app/title/url 컬럼) 읽기용 COALESCE ──
     // backfill 완료 전(컬럼 NULL)은 JSON fallback, 완료 후(컬럼 채움)은 컬럼 사용
-    private let sqlColApp = "COALESCE(app, json_extract(data, '$.app'))"
-    private let sqlColTitle = "COALESCE(title, json_extract(data, '$.title'))"
-    private let sqlColURL = "COALESCE(url, json_extract(data, '$.url'))"
+    // ⚠️ json_valid 가드: 정화된 data('' 또는 '{}' 등)가 유효 JSON이 아니면
+    //    json_extract이 'malformed JSON' 에러로 쿼리 전체를 죽이는 것을 방지
+    private let sqlColApp = "COALESCE(app, CASE WHEN json_valid(data) THEN json_extract(data, '$.app') END)"
+    private let sqlColTitle = "COALESCE(title, CASE WHEN json_valid(data) THEN json_extract(data, '$.title') END)"
+    private let sqlColURL = "COALESCE(url, CASE WHEN json_valid(data) THEN json_extract(data, '$.url') END)"
     private var backfillTimer: DispatchSourceTimer?
 
     /// 버퍼드 쓰기 시작 (앱 launch 시 1회)
@@ -202,18 +204,19 @@ class Database {
         }
         let lo = wm + 1
         let hi = min(wm + 500, maxId)
-        // 1) 컬럼 채우기 (COALESCE로 기존 값 덮어쓰기 방지 — idempotent)
+        // 1) 컬럼 채우기 (COALESCE로 기존 값 덮어쓰기 방지 — idempotent, json_valid 가드로 '' 안전)
         exec("""
             UPDATE events
-            SET app = COALESCE(app, json_extract(data, '$.app')),
-                title = COALESCE(title, json_extract(data, '$.title')),
-                url = COALESCE(url, json_extract(data, '$.url'))
+            SET app = COALESCE(app, CASE WHEN json_valid(data) THEN json_extract(data, '$.app') END),
+                title = COALESCE(title, CASE WHEN json_valid(data) THEN json_extract(data, '$.title') END),
+                url = COALESCE(url, CASE WHEN json_valid(data) THEN json_extract(data, '$.url') END)
             WHERE id >= \(lo) AND id <= \(hi)
         """)
-        // 2) data 정화: 알려진 3키 외에 추가 키가 없는 행만 ''로 (데이터 보존)
+        // 2) data 정화: 알려진 3키 외에 추가 키가 없는 행만 '{}'로 (데이터 보존)
+        //    ⚠️ ''이 아니라 '{}' — 빈 문자열은 JSON이 아니어서 json_extract('')이 에러
         exec("""
-            UPDATE events SET data = ''
-            WHERE id >= \(lo) AND id <= \(hi) AND data != ''
+            UPDATE events SET data = '{}'
+            WHERE id >= \(lo) AND id <= \(hi) AND data != '' AND data != '{}'
               AND NOT EXISTS (
                 SELECT 1 FROM json_each(events.data)
                 WHERE json_each.key NOT IN ('app', 'title', 'url')
@@ -336,7 +339,10 @@ class Database {
     private func queryRows(_ sql: String, _ bind: (OpaquePointer) -> Void) -> [[String: Any]] {
         var stmt: OpaquePointer?
         var results: [[String: Any]] = []
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            print("[DB] SQL prepare 실패: \(String(cString: sqlite3_errmsg(db))) — \(sql.prefix(120))")
+            return []
+        }
         bind(stmt!)
         while sqlite3_step(stmt) == SQLITE_ROW {
             var row: [String: Any] = [:]
@@ -352,6 +358,10 @@ class Database {
                 }
             }
             results.append(row)
+        }
+        // ⚠️ step 에러는 더 이상 침묵하지 않음 (이전: 부분 결과 반환으로 세션이 조용히 비어 보임)
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            print("[DB] ⚠️ SQL step 에러(\(String(cString: sqlite3_errmsg(db)))) — \(results.count)rows만 반환: \(sql.prefix(120))")
         }
         sqlite3_finalize(stmt)
         return results

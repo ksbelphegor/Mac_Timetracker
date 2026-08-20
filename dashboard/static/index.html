@@ -354,7 +354,7 @@
   </div>
   <div class="perm-row">
     <span style="width:16px;text-align:center;">🎥</span>
-    <div style="flex:1;font-size:13px;">스크린 레코딩 <span style="font-size:11px;color:#8b949e;">(모든 앱 창 제목) · <span id="perm-sr-state"></span></span></div>
+    <div style="flex:1;font-size:13px;">스크린 레코딩 <span style="font-size:11px;color:#8b949e;">(모든 앱 창 제목)<span id="perm-sr-note"></span> · <span id="perm-sr-state"></span></span></div>
     <button class="date-btn" onclick="permAction('prompt','screenrecording')">권한 요청</button>
     <button class="date-btn" onclick="permAction('settings','screenrecording')">시스템 설정</button>
   </div>
@@ -592,6 +592,8 @@ function renderPerm(p) {
     el.className = ok ? 'perm-state-ok' : 'perm-state-missing';
   };
   set('perm-sr-state', p.screen_recording);
+  const srNote = document.getElementById('perm-sr-note');
+  if (srNote) srNote.textContent = (p.sr_required === false) ? ' (macOS 26+ 필수 아님)' : '';
   set('perm-ax-state', p.accessibility);
   if (p.checked_at > 0) {
     document.getElementById('perm-updated').textContent =

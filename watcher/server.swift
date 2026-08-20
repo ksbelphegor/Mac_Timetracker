@@ -320,10 +320,12 @@ class HTTPServer {
             return .json(200, ["screen_recording": false, "accessibility": false, "all_ok": false, "checked_at": 0, "app_found": false])
         }
         let s = app.permissionSnapshot
+        let srReq = app.srRequired
         return .json(200, [
             "screen_recording": s.sr,
             "accessibility": s.ax,
-            "all_ok": s.sr && s.ax,
+            "sr_required": srReq,
+            "all_ok": s.ax && (!srReq || s.sr),
             "checked_at": Int(s.at.timeIntervalSince1970),
             "app_found": true
         ])
@@ -349,11 +351,13 @@ class HTTPServer {
             return .json(400, ["error": "Unknown action: \(action)"])
         }
         let s = app.permissionSnapshot
+        let srReq = app.srRequired
         return .json(200, [
             "triggered": true,
             "screen_recording": s.sr,
             "accessibility": s.ax,
-            "all_ok": s.sr && s.ax,
+            "sr_required": srReq,
+            "all_ok": s.ax && (!srReq || s.sr),
             "checked_at": Int(s.at.timeIntervalSince1970)
         ])
     }

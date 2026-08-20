@@ -262,15 +262,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             logger.warning("⚠️ 권한 상태 확인 필요 (변화/첫실행): SR=\(sr) AX=\(ax)")
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                // 순서: AX → ScreenRec (기존과 동일)
+                // 순서: AX → ScreenRec (기존과 동일) — macOS 26+에선 SR 필수 권한이 아니므로 스킵 가능
                 if axChanged {
                     self.axPromptShown = true
                     self.showAccessibilityPrompt()
-                    if srChanged, !self.screenRecPromptShown {
+                    if srChanged && self.srRequired, !self.screenRecPromptShown {
                         self.screenRecPromptShown = true
                         self.showScreenRecordingPrompt()
                     }
-                } else if srChanged, !self.screenRecPromptShown {
+                } else if srChanged && self.srRequired, !self.screenRecPromptShown {
                     self.screenRecPromptShown = true
                     self.showScreenRecordingPrompt()
                 }
@@ -329,20 +329,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Silent Permission Monitor (프롬프트 없이 상태 감지)
 
     /// 🔐 스크린 레코딩 권한 Silent probe — 절대 시스템 프롬프트를 트리거하지 않음.
-    /// 다른 프로세스의 창 이름은 SR 권한 없으면 redact(빈 값)되므로,
-    /// 전역 on-screen 창 중 '자기 자신 제외' 어느 창이든 이름이 있으면 허용으로 간주.
-    /// (기존 frontmost-only probe는 frontmost가 창 없는 앱일 때 false negative)
+    /// ≤15: 다른 프로세스 창 이름은 SR 권한 없으면 redact(빈 값)
+    /// macOS 26+: SR 없이도 kCGWindowName이 더 이상 redact되지 않음 (실측)
+    /// + 시스템 창(제어 센터/Window Server 등)은 권한 없어도 이름을 가져 false positive
+    ///    유발하므로 **일반 앱** 창(자기 제외) 중 이름이 있어야 true.
     func screenRecordingSilentCheck() -> Bool {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
               !list.isEmpty else { return false }
         let myPid = ProcessInfo.processInfo.processIdentifier
+        // 권한과 무관하게 이름을 가진 시스템 창 (로컬라이즈드 이름 포함)
+        let systemOwners: Set<String> = [
+            "Dock", "Window Server", "WindowServer", "SystemUIServer",
+            "Control Center", "제어 센터", "Notification Center", "알림 센터",
+            "loginwindow", "universalAccessAuthWarn", "ScreenSaverEngine"
+        ]
         for w in list {
             guard let owner = w[kCGWindowOwnerPID as String] as? Int, owner != myPid else { continue }
+            if let ownerName = w[kCGWindowOwnerName as String] as? String, systemOwners.contains(ownerName) { continue }
             if let name = w[kCGWindowName as String] as? String, !name.isEmpty {
                 return true
             }
         }
         return false
+    }
+
+    /// macOS 26+는 창 제목을 SR 권한으로 gating하지 않음 (실측) → SR 필수 권한 아님
+    var srRequired: Bool {
+        if #available(macOS 26, *) { return false }
+        return true
     }
 
     /// 권한 상태를 조용히 다시 확인 (프롬프트 없음). 부여→자동 반영, 재시작 불필요.

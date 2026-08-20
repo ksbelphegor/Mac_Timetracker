@@ -25,12 +25,19 @@ class Database {
 
     // ── 경량 쓰기: 버퍼 + 배치 트랜잭션 ──
     // 기존: 3s마다 autocommit INSERT = 매번 fsync →
-    // 이제: 5s/20개 단위 배치 트랜잭션으로 flush (매트로 Ded-fsync 1회)
-    // (앱 강제 종료 시 최대 ~5s-hearted 비트 데이터만 유실 — 3s granularity에서 무시 수준)
+    // 이제: 5s/20개 단위 배치 트랜잭션으로 flush (배치당 fsync 1회)
+    // (앱 강제 종료 시 최대 ~5s치 heartbeat 데이터만 유실 — 3s granularity에서 무시 수준)
     private var pendingEvents: [(bucketId: String, ts: Double, dur: Double, data: String)] = []
     private var bucketEnsured = false
     private var flushTimer: DispatchSourceTimer?
     private let flushThreshold = 20
+
+    // ── columnization (data JSON → app/title/url 컬럼) 읽기용 COALESCE ──
+    // backfill 완료 전(컬럼 NULL)은 JSON fallback, 완료 후(컬럼 채움)은 컬럼 사용
+    private let sqlColApp = "COALESCE(app, json_extract(data, '$.app'))"
+    private let sqlColTitle = "COALESCE(title, json_extract(data, '$.title'))"
+    private let sqlColURL = "COALESCE(url, json_extract(data, '$.url'))"
+    private var backfillTimer: DispatchSourceTimer?
 
     /// 버퍼드 쓰기 시작 (앱 launch 시 1회)
     func startWriteBuffer() {
@@ -40,6 +47,13 @@ class Database {
         timer.setEventHandler { [weak self] in self?.flushPending() }
         timer.resume()
         flushTimer = timer
+
+        // data JSON column backfill (배경 우선순위, 1s마다 배치 → catch-up까지 약 30분)
+        let bf = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "db-backfill", qos: .background))
+        bf.schedule(deadline: .now() + 5, repeating: 1)
+        bf.setEventHandler { [weak self] in self?.runBackfillTick() }
+        bf.resume()
+        backfillTimer = bf
 
         // WAL 파일 팽창 방지: 15분마다 PASSIVE checkpoint (쓰기 블로킹 없음)
         let maint = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "db-maint", qos: .utility))
@@ -74,7 +88,8 @@ class Database {
             if let err = err { free(err) }
             return
         }
-        let sql = "INSERT INTO events (bucket_id, timestamp, duration, data) VALUES (?, ?, ?, ?)"
+        let sql = "INSERT INTO events (bucket_id, timestamp, duration, data, app, title, url) " +
+                  "VALUES (?, ?, ?, ?, json_extract(?, '$.app'), json_extract(?, '$.title'), json_extract(?, '$.url'))"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
@@ -86,6 +101,10 @@ class Database {
             sqlite3_bind_double(stmt, 2, e.ts)
             sqlite3_bind_double(stmt, 3, e.dur)
             sqlite3_bind_text(stmt, 4, (e.data as NSString).utf8String, -1, nil)
+            // columnization: data JSON에서 SQLite가 app/title/url 추출 (버퍼는 JSON 그대로 보관)
+            sqlite3_bind_text(stmt, 5, (e.data as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 6, (e.data as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 7, (e.data as NSString).utf8String, -1, nil)
             if sqlite3_step(stmt) != SQLITE_DONE {
                 break
             }
@@ -103,6 +122,7 @@ class Database {
         flushPendingLocked()
         flushTimer?.cancel(); flushTimer = nil
         walTimer?.cancel(); walTimer = nil
+        backfillTimer?.cancel(); backfillTimer = nil
         guard let db = db else { return }
         sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil)
         sqlite3_close(db)
@@ -120,7 +140,88 @@ class Database {
         sqlite3_exec(db, "PRAGMA journal_mode=WAL", nil, nil, nil)
         sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nil, nil, nil)
         createTables()
+        migrateEventColumns()
     }
+
+    /// events 테이블에 app/title/url 컬럼 + meta 테이블 추가 (idempotent).
+    /// data JSON을 평탄한 컬럼으로 normal화 → 저장 경량화 + 쿼리 가속 (VACUUM 후 파일 축소).
+    private func migrateEventColumns() {
+        guard let db = db else { return }
+        for col in ["app", "title", "url"] {
+            let exists = queryRows("SELECT name FROM pragma_table_info('events') WHERE name = ?") {
+                sqlite3_bind_text($0, 1, (col as NSString).utf8String, -1, nil)
+            }
+            if exists.isEmpty {
+                sqlite3_exec(db, "ALTER TABLE events ADD COLUMN \(col) TEXT", nil, nil, nil)
+                print("DB migration: events.\(col) added")
+            }
+        }
+        sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_events_app ON events(app)", nil, nil, nil)
+        sqlite3_exec(db, """
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        """, nil, nil, nil)
+    }
+
+    // ── columnization backfill: data JSON → app/title/url (zero-loss, resume 가능) ──
+    private func metaInt(_ key: String) -> Int64 {
+        let rows = queryRows("SELECT value FROM meta WHERE key = ?") {
+            sqlite3_bind_text($0, 1, (key as NSString).utf8String, -1, nil)
+        }
+        return Int64(rows.first?["value"] as? String ?? "0") ?? 0
+    }
+    private func setMeta(_ key: String, _ value: Int64) {
+        exec("INSERT INTO meta (key, value) VALUES ('\(key)', '\(value)') ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    }
+
+    /// 백그라운드 배치 백필 (1s tick, 배치 500행, id watermark 기반 resume).
+    /// zero-loss 보장: 추가 키(예: _ax/_src)가 있는 행은 data 원본 보존.
+    private func runBackfillTick() {
+        // 단일 connection 보호: 다른 스레드(메인/http/flush)와 동시 사용 방지
+        dbLock.lock()
+        defer { dbLock.unlock() }
+        guard let db = db else { return }
+        let rows = queryRows("SELECT MAX(id) AS max_id FROM events") { _ in }
+        let maxId = rows.first?["max_id"] as? Int64 ?? 0
+        guard maxId > 0 else { return }
+        let wm = metaInt("backfill_wm")
+        guard wm < maxId else {
+            // catch-up 완료: 파일 축소용 VACUUM 1회 (meta 플래그로 재실행 방지)
+            if metaInt("vacuum_done") == 0 {
+                print("DB backfill 완료 — VACUUM 실행 (파일 축소)…")
+                if sqlite3_exec(db, "VACUUM", nil, nil, nil) == SQLITE_OK {
+                    setMeta("vacuum_done", 1)
+                    print("DB VACUUM 완료")
+                } else {
+                    print("DB VACUUM 실패(다음 tick 재시도): \(String(cString: sqlite3_errmsg(db)))")
+                }
+            }
+            return
+        }
+        let lo = wm + 1
+        let hi = min(wm + 500, maxId)
+        // 1) 컬럼 채우기 (COALESCE로 기존 값 덮어쓰기 방지 — idempotent)
+        exec("""
+            UPDATE events
+            SET app = COALESCE(app, json_extract(data, '$.app')),
+                title = COALESCE(title, json_extract(data, '$.title')),
+                url = COALESCE(url, json_extract(data, '$.url'))
+            WHERE id >= \(lo) AND id <= \(hi)
+        """)
+        // 2) data 정화: 알려진 3키 외에 추가 키가 없는 행만 ''로 (데이터 보존)
+        exec("""
+            UPDATE events SET data = ''
+            WHERE id >= \(lo) AND id <= \(hi) AND data != ''
+              AND NOT EXISTS (
+                SELECT 1 FROM json_each(events.data)
+                WHERE json_each.key NOT IN ('app', 'title', 'url')
+              )
+        """)
+        setMeta("backfill_wm", hi)
+    }
+
 
     private func createTables() {
         exec("""
@@ -277,13 +378,15 @@ class Database {
                        appFilter: String? = nil,
                        browserOnly: Bool = false,
                        targetDate: String? = nil) -> [[String: Any]] {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         let (start, end) = parseDate(targetDate)
-        // json_extract을 SQL에서 수행 → Swift侧 row당 JSON 파싱 제거
+        // columnization: 컬럼(app/title/url) 우선, NULL이면 data JSON fallback
         let rows = queryRows("""
             SELECT timestamp, duration,
-                   json_extract(data, '$.app') as app,
-                   json_extract(data, '$.title') as title,
-                   json_extract(data, '$.url') as url
+                   \(sqlColApp) as app,
+                   \(sqlColTitle) as title,
+                   \(sqlColURL) as url
             FROM events
             WHERE bucket_id = ? AND timestamp >= ? AND timestamp <= ?
             ORDER BY timestamp ASC
@@ -341,10 +444,12 @@ class Database {
     /// 경량화: 앱을 GROUP BY로 SQLite에서 집계 + 마지막 타이틀은 window function으로.
     /// (기존: 하루치 8~10k row를 Swift에서 row당 JSON 파싱 → 이제 수십 개 앱 row만)
     func getTodayInfo(targetDate: String? = nil) -> TodayInfo {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         let (start, end) = parseDate(targetDate)
 
         let appRows = queryRows("""
-            SELECT json_extract(data, '$.app') as app,
+            SELECT \(sqlColApp) as app,
                    SUM(duration) as total,
                    COUNT(*) as n
             FROM events
@@ -360,9 +465,9 @@ class Database {
         var lastTitles: [String: String] = [:]
         for r in queryRows("""
             SELECT app, title FROM (
-                SELECT json_extract(data, '$.app') as app,
-                       json_extract(data, '$.title') as title,
-                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.app') ORDER BY timestamp DESC) as rn
+                SELECT \(sqlColApp) as app,
+                       \(sqlColTitle) as title,
+                       ROW_NUMBER() OVER (PARTITION BY \(sqlColApp) ORDER BY timestamp DESC) as rn
                 FROM events
                 WHERE bucket_id = 'aw-watcher-window' AND timestamp >= ? AND timestamp <= ?
             ) WHERE rn = 1
@@ -389,7 +494,7 @@ class Database {
         var currentApp: String? = nil
         var currentTitle: String? = nil
         for r in queryRows("""
-            SELECT json_extract(data, '$.app') as app, json_extract(data, '$.title') as title
+            SELECT \(sqlColApp) as app, \(sqlColTitle) as title
             FROM events
             WHERE bucket_id = 'aw-watcher-window' AND timestamp >= ? AND timestamp <= ?
             ORDER BY timestamp DESC LIMIT 10
@@ -419,6 +524,8 @@ class Database {
     // MARK: - Categories (ActivityWatch style — hierarchical)
 
     func getCategories() -> [[String: Any]] {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         let rows = queryRows("SELECT id, name, color, regex, parent_id, sort_order, score, created_at FROM categories ORDER BY sort_order ASC, id ASC") { _ in }
         // Get all rules grouped by category_id
         let allRules = queryRows("SELECT id, category_id, pattern, case_insensitive FROM rules ORDER BY id ASC") { _ in }
@@ -452,6 +559,8 @@ class Database {
     }
 
     func createCategory(name: String, color: String, regex: String = "", parentId: Int64? = nil, score: Int = 0) -> Int64? {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         let sql = "INSERT INTO categories (name, color, regex, parent_id, score) VALUES (?, ?, ?, ?, ?)"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
@@ -472,6 +581,8 @@ class Database {
     }
 
     func updateCategory(id: Int64, name: String, color: String, regex: String = "", parentId: Int64? = nil, sortOrder: Int = 0, score: Int = 0) {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         let sql = "UPDATE categories SET name = ?, color = ?, regex = ?, parent_id = ?, sort_order = ?, score = ? WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -492,6 +603,8 @@ class Database {
     }
 
     func deleteCategory(id: Int64) {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         // reparent children to grandparent
         let reparent = "UPDATE categories SET parent_id = (SELECT parent_id FROM categories WHERE id = ?) WHERE parent_id = ?"
         var stmt1: OpaquePointer?
@@ -513,12 +626,16 @@ class Database {
     // MARK: - Rules CRUD
 
     func getRules(categoryId: Int64) -> [[String: Any]] {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         return queryRows("SELECT id, pattern, case_insensitive FROM rules WHERE category_id = ? ORDER BY id ASC") { stmt in
             sqlite3_bind_int64(stmt, 1, categoryId)
         }
     }
 
     func createRule(categoryId: Int64, pattern: String, caseInsensitive: Bool = true) -> Int64? {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         let sql = "INSERT INTO rules (category_id, pattern, case_insensitive) VALUES (?, ?, ?)"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
@@ -533,6 +650,8 @@ class Database {
     }
 
     func updateRule(id: Int64, pattern: String, caseInsensitive: Bool = true) {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         let sql = "UPDATE rules SET pattern = ?, case_insensitive = ? WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -545,6 +664,8 @@ class Database {
     }
 
     func deleteRule(id: Int64) {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         let sql = "DELETE FROM rules WHERE id = ?"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -559,6 +680,13 @@ class Database {
     private var ruleCache: [(catName: String, catColor: String, catId: Int64, pattern: NSRegularExpression)]? = nil
 
     func resolveCategory(app: String, title: String) -> (name: String, color: String)? {
+        dbLock.lock()
+        defer { dbLock.unlock() }
+        return resolveCategoryLocked(app: app, title: title)
+    }
+
+    /// dbLock 보유 상태 전용 (이미 락을 가진 내부 함수에서 호출)
+    private func resolveCategoryLocked(app: String, title: String) -> (name: String, color: String)? {
         if ruleCache == nil { reloadRuleCache() }
         let target = "\(app) \(title)".lowercased()
         for r in ruleCache ?? [] {
@@ -596,6 +724,8 @@ class Database {
 
     /// 한 번의 DB 조회로 모든 카테고리의 matches 반환 (성능 최적화)
     func getAllCategoryMatches() -> [String: Any] {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         // 1. 모든 카테고리와 규칙 로드
         let allCats = queryRows("""
             SELECT c.id, c.name, c.color, r.id as rid, r.pattern, r.case_insensitive
@@ -627,15 +757,15 @@ class Database {
         let (start, end) = parseDate(nil)
         let skipList = skipApps.map { "'\($0)'" }.joined(separator: ",")
         let rows = queryRows("""
-            SELECT json_extract(data, '$.app') as app,
-                   json_extract(data, '$.title') as title,
+            SELECT \(sqlColApp) as app,
+                   \(sqlColTitle) as title,
                    SUM(duration) as dur
             FROM events
             WHERE bucket_id = 'aw-watcher-window'
               AND timestamp >= ? AND timestamp <= ?
-              AND json_extract(data, '$.app') NOT IN (\(skipList))
-              AND json_extract(data, '$.title') IS NOT NULL
-              AND json_extract(data, '$.title') != ''
+              AND \(sqlColApp) NOT IN (\(skipList))
+              AND \(sqlColTitle) IS NOT NULL
+              AND \(sqlColTitle) != ''
             GROUP BY app, title
         """) { stmt in
             sqlite3_bind_double(stmt, 1, start)
@@ -687,17 +817,19 @@ class Database {
     // MARK: - Tag Stats (regex-based)
 
     func getTagStats(targetDate: String? = nil) -> [[String: Any]] {
+        dbLock.lock()
+        defer { dbLock.unlock() }
         let (start, end) = parseDate(targetDate)
         let skipList = skipApps.map { "'\($0)'" }.joined(separator: ",")
         // (app,title) pair 단위 SQL 집계: regex 매칭이 row당(~8k) → pair당(~수십)으로
         let rows = queryRows("""
-            SELECT json_extract(data, '$.app') as app,
-                   json_extract(data, '$.title') as title,
+            SELECT \(sqlColApp) as app,
+                   \(sqlColTitle) as title,
                    SUM(duration) as dur
             FROM events
             WHERE bucket_id = 'aw-watcher-window'
               AND timestamp >= ? AND timestamp <= ?
-              AND json_extract(data, '$.app') NOT IN (\(skipList))
+              AND \(sqlColApp) NOT IN (\(skipList))
             GROUP BY app, title
         """) { stmt in
             sqlite3_bind_double(stmt, 1, start)
@@ -724,7 +856,7 @@ class Database {
         var untaggedSeconds: Double = 0
 
         for (_, pair) in pairMap {
-            if let cat = resolveCategory(app: pair.app, title: pair.title) {
+            if let cat = resolveCategoryLocked(app: pair.app, title: pair.title) {
                 tagTotals[cat.name, default: (0, cat.color)].seconds += pair.dur
             } else {
                 untaggedSeconds += pair.dur

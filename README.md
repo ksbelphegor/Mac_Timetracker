@@ -80,8 +80,11 @@ scripts/               # 빌드/실행/launchd 스크립트
 ## 자동 시작 / 크래시 복구 (선택)
 
 ```bash
-cp scripts/com.jsk.mactitracker.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.jsk.mactitracker.plist   # 로그인 시 자동 실행
+# plist 템플릿에 홈/앱 경로 채워서 설치
+sed -e "s|__HOME__|$HOME|" \
+    -e "s|__APP_PATH__|$(pwd)|" \
+    scripts/com.jsk.mactimetracker.plist > ~/Library/LaunchAgents/com.jsk.mactimetracker.plist
+launchctl load ~/Library/LaunchAgents/com.jsk.mactimetracker.plist   # 로그인 시 자동 실행
 ```
 
 - `KeepAlive.SuccessfulExit=true`: **크래시 시에만** 자동 재시작 (수동 quit은 존중)

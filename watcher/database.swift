@@ -23,10 +23,86 @@ class Database {
         close()
     }
 
-    /// 명시적 close + WAL checkpoint (앱 종료 시 권장)
+    // ── 경량 쓰기: 버퍼 + 배치 트랜잭션 ──
+    // 기존: 3s마다 autocommit INSERT = 매번 fsync →
+    // 이제: 5s/20개 단위 배치 트랜잭션으로 flush (매트로 Ded-fsync 1회)
+    // (앱 강제 종료 시 최대 ~5s-hearted 비트 데이터만 유실 — 3s granularity에서 무시 수준)
+    private var pendingEvents: [(bucketId: String, ts: Double, dur: Double, data: String)] = []
+    private var bucketEnsured = false
+    private var flushTimer: DispatchSourceTimer?
+    private let flushThreshold = 20
+
+    /// 버퍼드 쓰기 시작 (앱 launch 시 1회)
+    func startWriteBuffer() {
+        guard flushTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "db-flush", qos: .utility))
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in self?.flushPending() }
+        timer.resume()
+        flushTimer = timer
+
+        // WAL 파일 팽창 방지: 15분마다 PASSIVE checkpoint (쓰기 블로킹 없음)
+        let maint = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "db-maint", qos: .utility))
+        maint.schedule(deadline: .now() + 15 * 60, repeating: 15 * 60)
+        maint.setEventHandler { [weak self] in
+            self?.dbLock.lock()
+            if let db = self?.db {
+                sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", nil, nil, nil)
+            }
+            self?.dbLock.unlock()
+        }
+        maint.resume()
+        walTimer = maint
+    }
+    private var walTimer: DispatchSourceTimer?
+
+    /// 현재 버퍼를 즉시 DB에 commit (terminate/동기화 시)
+    func flushPending() {
+        dbLock.lock()
+        defer { dbLock.unlock() }
+        flushPendingLocked()
+    }
+
+    private func flushPendingLocked() {
+        guard let db = db, !pendingEvents.isEmpty else { return }
+        let batch = pendingEvents
+        pendingEvents.removeAll()
+
+        var err: UnsafeMutablePointer<CChar>?
+        guard sqlite3_exec(db, "BEGIN", nil, nil, &err) == SQLITE_OK else {
+            pendingEvents.insert(contentsOf: batch, at: 0)  // 실패하면 재시도용 복원
+            if let err = err { free(err) }
+            return
+        }
+        let sql = "INSERT INTO events (bucket_id, timestamp, duration, data) VALUES (?, ?, ?, ?)"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            pendingEvents.insert(contentsOf: batch, at: 0)
+            return
+        }
+        for e in batch {
+            sqlite3_bind_text(stmt, 1, (e.bucketId as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, e.ts)
+            sqlite3_bind_double(stmt, 3, e.dur)
+            sqlite3_bind_text(stmt, 4, (e.data as NSString).utf8String, -1, nil)
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                break
+            }
+            sqlite3_reset(stmt)
+            sqlite3_clear_bindings(stmt)
+        }
+        sqlite3_finalize(stmt)
+        sqlite3_exec(db, "COMMIT", nil, nil, nil)
+    }
+
+    /// 명시적 close + 남은 버퍼 flush + WAL checkpoint (앱 종료 시)
     func close() {
         dbLock.lock()
         defer { dbLock.unlock() }
+        flushPendingLocked()
+        flushTimer?.cancel(); flushTimer = nil
+        walTimer?.cancel(); walTimer = nil
         guard let db = db else { return }
         sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil)
         sqlite3_close(db)
@@ -101,45 +177,53 @@ class Database {
         sqlite3_exec(db, sql, nil, nil, nil)
     }
 
-    func ensureBucket(_ id: String = "aw-watcher-window",
-                      type: String = "app",
-                      client: String = "aw-watcher-window") {
+    func insertHeartbeat(bucketId: String = "aw-watcher-window",
+                         timestamp: Double, duration: Double, data: String) {
+        dbLock.lock()
+        defer { dbLock.unlock() }
+        guard db != nil else { return }
+        if !bucketEnsured {
+            ensureBucketRaw(bucketId)
+            bucketEnsured = true
+        }
+        // 즉시 commit 대신 버퍼에 쌓고, threshold/타이머로 배치 flush
+        pendingEvents.append((bucketId: bucketId, ts: timestamp, dur: duration, data: data))
+        if pendingEvents.count >= flushThreshold {
+            flushPendingLocked()
+        }
+    }
+
+    private func ensureBucketRaw(_ id: String) {
+        guard let db = db else { return }
         let sql = "INSERT OR IGNORE INTO buckets (id, type, client, hostname) VALUES (?, ?, ?, ?)"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 2, (type as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 3, (client as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 2, ("app" as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 3, ("aw-watcher-window" as NSString).utf8String, -1, nil)
         let hostname = ProcessInfo.processInfo.hostName
         sqlite3_bind_text(stmt, 4, (hostname as NSString).utf8String, -1, nil)
         sqlite3_step(stmt)
         sqlite3_finalize(stmt)
     }
 
-    func insertHeartbeat(bucketId: String = "aw-watcher-window",
-                         timestamp: Double, duration: Double, data: String) {
-        ensureBucket(bucketId)
-        let sql = "INSERT INTO events (bucket_id, timestamp, duration, data) VALUES (?, ?, ?, ?)"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        sqlite3_bind_text(stmt, 1, (bucketId as NSString).utf8String, -1, nil)
-        sqlite3_bind_double(stmt, 2, timestamp)
-        sqlite3_bind_double(stmt, 3, duration)
-        sqlite3_bind_text(stmt, 4, (data as NSString).utf8String, -1, nil)
-        sqlite3_step(stmt)
-        sqlite3_finalize(stmt)
-    }
-
     // MARK: - Date helpers
 
+    /// "yyyy-MM-dd" → 해당 날짜 00:00~23:59 (UNIX epoch, **현재 로컬 시간대** 기준).
+    /// +09:00 하드코딩 제거: 해외 체류 시 '오늘' 기준이 깨지는 문제 방지.
     private func parseDate(_ targetDate: String?) -> (start: Double, end: Double) {
         let cal = Calendar.current
-        let now = Date()
         let day: Date
-        if let d = targetDate, let parsed = ISO8601DateFormatter().date(from: d + "T00:00:00+09:00") {
-            day = parsed
+        if let d = targetDate {
+            let parts = d.split(separator: "-").compactMap { Int($0) }
+            if parts.count == 3,
+               let dt = cal.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])) {
+                day = dt
+            } else {
+                day = cal.startOfDay(for: Date())
+            }
         } else {
-            day = cal.startOfDay(for: now)
+            day = cal.startOfDay(for: Date())
         }
         let start = day.timeIntervalSince1970
         let end = cal.date(byAdding: .day, value: 1, to: day)!.timeIntervalSince1970 - 1
@@ -187,76 +271,20 @@ class Database {
         "Microsoft Edge", "Arc", "Orion", "Opera", "Opera GX", "Vivaldi", "Tor Browser",
         "네이버 웨일", "Whale", "시크릿 모드"]
 
-    func getTodayEvents(bucketId: String = "aw-watcher-window",
-                        targetDate: String? = nil) -> [[String: Any]] {
-        let (start, end) = parseDate(targetDate)
-        return queryRows("""
-            SELECT timestamp, duration, data FROM events
-            WHERE bucket_id = ? AND timestamp >= ? AND timestamp <= ?
-            ORDER BY timestamp ASC
-        """) { stmt in
-            sqlite3_bind_text(stmt, 1, (bucketId as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 2, start)
-            sqlite3_bind_double(stmt, 3, end)
-        }
-    }
-
-    func getAppSummary(bucketId: String = "aw-watcher-window",
-                       startDate: String? = nil, endDate: String? = nil) -> [[String: Any]] {
-        let start = startDate ?? todayISO()
-        let end = endDate ?? todayISO()
-        let (s, e) = (parseDate(start).start, parseDate(end).end)
-        return queryRows("""
-            SELECT date(timestamp, 'unixepoch') as day,
-                   json_extract(data, '$.app') as app,
-                   SUM(duration) as total_seconds
-            FROM events
-            WHERE bucket_id = ? AND timestamp >= ? AND timestamp <= ?
-            GROUP BY day, app
-            ORDER BY day DESC, total_seconds DESC
-        """) { stmt in
-            sqlite3_bind_text(stmt, 1, (bucketId as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 2, s)
-            sqlite3_bind_double(stmt, 3, e)
-        }
-    }
-
-    func getHourlyBreakdown(bucketId: String = "aw-watcher-window",
-                            targetDate: String? = nil) -> [String: [String: Double]] {
-        let (start, end) = parseDate(targetDate)
-        let rows = queryRows("""
-            SELECT timestamp, duration, data FROM events
-            WHERE bucket_id = ? AND timestamp >= ? AND timestamp <= ?
-            ORDER BY timestamp ASC
-        """) { stmt in
-            sqlite3_bind_text(stmt, 1, (bucketId as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 2, start)
-            sqlite3_bind_double(stmt, 3, end)
-        }
-
-        var hourly: [String: [String: Double]] = [:]
-        for r in rows {
-            guard let dataStr = r["data"] as? String,
-                  let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String],
-                  let app = data["app"] else { continue }
-            let ts = r["timestamp"] as? Double ?? 0
-            let dur = r["duration"] as? Double ?? 0
-            // local timezone 시간대 (기존 버저: UTC 기반 → 한국 시간대 1~8시가 00:00에 모두 몰림)
-            let cal = Calendar.current
-            let hour = cal.component(.hour, from: Date(timeIntervalSince1970: ts))
-            let hourStr = String(format: "%02d:00", hour)
-            hourly[hourStr, default: [:]][app, default: 0] += dur
-        }
-        return hourly
-    }
+    // (getTodayEvents 제거됨: dead API — 읽기 경로 모두 SQL 집계/직접 json_extract 사용)
 
     func buildSessions(bucketId: String = "aw-watcher-window",
                        appFilter: String? = nil,
                        browserOnly: Bool = false,
                        targetDate: String? = nil) -> [[String: Any]] {
         let (start, end) = parseDate(targetDate)
+        // json_extract을 SQL에서 수행 → Swift侧 row당 JSON 파싱 제거
         let rows = queryRows("""
-            SELECT timestamp, duration, data FROM events
+            SELECT timestamp, duration,
+                   json_extract(data, '$.app') as app,
+                   json_extract(data, '$.title') as title,
+                   json_extract(data, '$.url') as url
+            FROM events
             WHERE bucket_id = ? AND timestamp >= ? AND timestamp <= ?
             ORDER BY timestamp ASC
         """) { stmt in
@@ -269,11 +297,9 @@ class Database {
         var current: [String: Any]?
 
         for r in rows {
-            guard let dataStr = r["data"] as? String,
-                  let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String] else { continue }
-            let app = data["app"] ?? "Unknown"
-            let title = data["title"] ?? app
-            let url = data["url"] ?? ""
+            let app = r["app"] as? String ?? "Unknown"
+            let title = r["title"] as? String ?? app
+            let url = r["url"] as? String ?? ""
             let ts = r["timestamp"] as? Double ?? 0
             let dur = r["duration"] as? Double ?? 0
 
@@ -312,41 +338,74 @@ class Database {
         let currentTitle: String?
     }
 
+    /// 경량화: 앱을 GROUP BY로 SQLite에서 집계 + 마지막 타이틀은 window function으로.
+    /// (기존: 하루치 8~10k row를 Swift에서 row당 JSON 파싱 → 이제 수십 개 앱 row만)
     func getTodayInfo(targetDate: String? = nil) -> TodayInfo {
-        let events = getTodayEvents(targetDate: targetDate)
-        var appDict: [String: Double] = [:]
-        var appTitles: [String: String] = [:]
-        var total: Double = 0
+        let (start, end) = parseDate(targetDate)
 
-        for e in events {
-            guard let dataStr = e["data"] as? String,
-                  let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String] else { continue }
-            let app = data["app"] ?? "Unknown"
-            if isSkipped(app) { continue }
-            let title = data["title"] ?? ""
-            let dur = e["duration"] as? Double ?? 0
-            appDict[app, default: 0] += dur
-            appTitles[app] = title
-            total += dur
+        let appRows = queryRows("""
+            SELECT json_extract(data, '$.app') as app,
+                   SUM(duration) as total,
+                   COUNT(*) as n
+            FROM events
+            WHERE bucket_id = 'aw-watcher-window' AND timestamp >= ? AND timestamp <= ?
+            GROUP BY app
+            ORDER BY total DESC
+        """) { stmt in
+            sqlite3_bind_double(stmt, 1, start)
+            sqlite3_bind_double(stmt, 2, end)
         }
 
-        let sortedApps = appDict.sorted { $0.value > $1.value }
-            .map { (name: $0.key, seconds: $0.value, lastTitle: appTitles[$0.key] ?? "") }
+        // 앱별 마지막 창 제목 (SQLite 3.25+ window function)
+        var lastTitles: [String: String] = [:]
+        for r in queryRows("""
+            SELECT app, title FROM (
+                SELECT json_extract(data, '$.app') as app,
+                       json_extract(data, '$.title') as title,
+                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.app') ORDER BY timestamp DESC) as rn
+                FROM events
+                WHERE bucket_id = 'aw-watcher-window' AND timestamp >= ? AND timestamp <= ?
+            ) WHERE rn = 1
+        """) { stmt in
+            sqlite3_bind_double(stmt, 1, start)
+            sqlite3_bind_double(stmt, 2, end)
+        } {
+            if let a = r["app"] as? String, let t = r["title"] as? String {
+                lastTitles[a] = t
+            }
+        }
 
+        var total: Double = 0
+        var apps: [(name: String, seconds: Double, lastTitle: String)] = []
+        for r in appRows {
+            let app = r["app"] as? String ?? "Unknown"
+            if isSkipped(app) { continue }
+            let secs = r["total"] as? Double ?? 0
+            total += secs
+            apps.append((name: app, seconds: secs, lastTitle: lastTitles[app] ?? ""))
+        }
+
+        // 현재 앱: 최근 이벤트 중 skip 제외 첫 개
         var currentApp: String? = nil
         var currentTitle: String? = nil
-        for e in events.reversed() {
-            guard let dataStr = e["data"] as? String,
-                  let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String] else { continue }
-            let app = data["app"] ?? ""
+        for r in queryRows("""
+            SELECT json_extract(data, '$.app') as app, json_extract(data, '$.title') as title
+            FROM events
+            WHERE bucket_id = 'aw-watcher-window' AND timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp DESC LIMIT 10
+        """) { stmt in
+            sqlite3_bind_double(stmt, 1, start)
+            sqlite3_bind_double(stmt, 2, end)
+        } {
+            let app = r["app"] as? String ?? ""
             if !isSkipped(app) {
                 currentApp = app
-                currentTitle = data["title"]
+                currentTitle = r["title"] as? String
                 break
             }
         }
 
-        return TodayInfo(totalSeconds: total, apps: sortedApps, currentApp: currentApp, currentTitle: currentTitle)
+        return TodayInfo(totalSeconds: total, apps: apps, currentApp: currentApp, currentTitle: currentTitle)
     }
 
     private func todayISO() -> String {
@@ -533,64 +592,7 @@ class Database {
         ruleCache = cache
     }
 
-    // MARK: - Category Match Preview
-
-    func getCategoryMatches(id: Int64) -> [[String: Any]] {
-        let rules = queryRows("SELECT id, pattern, case_insensitive FROM rules WHERE category_id = ?") { stmt in
-            sqlite3_bind_int64(stmt, 1, id)
-        }
-        guard !rules.isEmpty else { return [] }
-
-        var compiled: [NSRegularExpression] = []
-        for r in rules {
-            guard let pat = r["pattern"] as? String, !pat.isEmpty else { continue }
-            let ci = (r["case_insensitive"] as? Int ?? 1) != 0
-            if let regex = try? NSRegularExpression(pattern: pat, options: ci ? [.caseInsensitive] : []) {
-                compiled.append(regex)
-            }
-        }
-
-        // 오늘 날짜 범위만 조회 (스택드 바와 일치)
-        let (start, end) = parseDate(nil)
-        let skipList = skipApps.map { "'\($0)'" }.joined(separator: ",")
-        let rows = queryRows("""
-            SELECT json_extract(data, '$.app') as app,
-                   json_extract(data, '$.title') as title,
-                   duration
-            FROM events
-            WHERE bucket_id = 'aw-watcher-window'
-              AND timestamp >= ? AND timestamp <= ?
-              AND json_extract(data, '$.app') NOT IN (\(skipList))
-              AND json_extract(data, '$.title') IS NOT NULL
-              AND json_extract(data, '$.title') != ''
-        """) { stmt in
-            sqlite3_bind_double(stmt, 1, start)
-            sqlite3_bind_double(stmt, 2, end)
-        }
-
-        var pairMap: [String: (app: String, title: String, duration: Double)] = [:]
-        for row in rows {
-            let app = row["app"] as? String ?? ""
-            if isSkipped(app) { continue }
-            let title = row["title"] as? String ?? ""
-            let dur = row["duration"] as? Double ?? 0
-            let target = "\(app) \(title)".lowercased()
-            let range = NSRange(target.startIndex..<target.endIndex, in: target)
-            for regex in compiled {
-                if regex.firstMatch(in: target, range: range) != nil {
-                    let key = "\(app)|||\(title)"
-                    if pairMap[key] != nil {
-                        pairMap[key]!.duration += dur
-                    } else {
-                        pairMap[key] = (app, title, dur)
-                    }
-                    break
-                }
-            }
-        }
-
-        return pairMap.values.map { ["app": $0.app, "title": $0.title, "duration": $0.duration] }
-    }
+    // (getCategoryMatches/getTodayEvents 제거됨: 대시보드 미사용 dead API — 경량화)
 
     /// 한 번의 DB 조회로 모든 카테고리의 matches 반환 (성능 최적화)
     func getAllCategoryMatches() -> [String: Any] {
@@ -621,19 +623,20 @@ class Database {
             }
         }
 
-        // 2. 오늘 이벤트 1회 조회
+        // 2. 오늘 이벤트 1회 조회 — (app,title) pair 단위 SQL 집계 (row당 regex → pair당 regex)
         let (start, end) = parseDate(nil)
         let skipList = skipApps.map { "'\($0)'" }.joined(separator: ",")
         let rows = queryRows("""
             SELECT json_extract(data, '$.app') as app,
                    json_extract(data, '$.title') as title,
-                   duration
+                   SUM(duration) as dur
             FROM events
             WHERE bucket_id = 'aw-watcher-window'
               AND timestamp >= ? AND timestamp <= ?
               AND json_extract(data, '$.app') NOT IN (\(skipList))
               AND json_extract(data, '$.title') IS NOT NULL
               AND json_extract(data, '$.title') != ''
+            GROUP BY app, title
         """) { stmt in
             sqlite3_bind_double(stmt, 1, start)
             sqlite3_bind_double(stmt, 2, end)
@@ -647,7 +650,7 @@ class Database {
             let app = row["app"] as? String ?? ""
             if isSkipped(app) { continue }
             let title = row["title"] as? String ?? ""
-            let dur = row["duration"] as? Double ?? 0
+            let dur = row["dur"] as? Double ?? 0
             let target = "\(app) \(title)".lowercased()
             let range = NSRange(target.startIndex..<target.endIndex, in: target)
 
@@ -679,58 +682,23 @@ class Database {
         return output
     }
 
-    /// 어떤 카테고리에도 매칭되지 않는 고유 (app, title) 쌍 반환
-    func getUntaggedPairs() -> [[String: Any]] {
-        if ruleCache == nil { reloadRuleCache() }
-        return getRecentPairs().filter { pair in
-            let target = "\(pair["app"] ?? "") \(pair["title"] ?? "")".lowercased()
-            for r in ruleCache ?? [] {
-                let range = NSRange(target.startIndex..<target.endIndex, in: target)
-                if r.pattern.firstMatch(in: target, range: range) != nil {
-                    return false
-                }
-            }
-            return true
-        }
-    }
-
-    /// 최근 N일간 고유 (app, title) 쌍 (중복 제거)
-    private func getRecentPairs(days: Int = 7) -> [[String: Any]] {
-        let cal = Calendar.current
-        guard let startDay = cal.date(byAdding: .day, value: -days, to: Date()) else { return [] }
-        let start = cal.startOfDay(for: startDay).timeIntervalSince1970
-        let end = Date().timeIntervalSince1970 + 3600 // 약간 여유
-        let skipList = skipApps.map { "'\($0)'" }.joined(separator: ",")
-        let rows = queryRows("""
-            SELECT DISTINCT json_extract(data, '$.app') as app,
-                            json_extract(data, '$.title') as title
-            FROM events
-            WHERE bucket_id = 'aw-watcher-window'
-              AND timestamp >= ? AND timestamp <= ?
-              AND json_extract(data, '$.app') NOT IN (\(skipList))
-              AND json_extract(data, '$.title') IS NOT NULL
-              AND json_extract(data, '$.title') != ''
-        """) { stmt in
-            sqlite3_bind_double(stmt, 1, start)
-            sqlite3_bind_double(stmt, 2, end)
-        }
-        // 부분 문자열 스킵 (SQL NOT IN으로는 대체 불가)
-        return rows.filter { !isSkipped($0["app"] as? String ?? "") }
-    }
+    // (getUntaggedPairs/getRecentPairs 제거됨: 대시보드 미사용 dead API)
 
     // MARK: - Tag Stats (regex-based)
 
     func getTagStats(targetDate: String? = nil) -> [[String: Any]] {
         let (start, end) = parseDate(targetDate)
         let skipList = skipApps.map { "'\($0)'" }.joined(separator: ",")
+        // (app,title) pair 단위 SQL 집계: regex 매칭이 row당(~8k) → pair당(~수십)으로
         let rows = queryRows("""
             SELECT json_extract(data, '$.app') as app,
                    json_extract(data, '$.title') as title,
-                   duration
+                   SUM(duration) as dur
             FROM events
             WHERE bucket_id = 'aw-watcher-window'
               AND timestamp >= ? AND timestamp <= ?
               AND json_extract(data, '$.app') NOT IN (\(skipList))
+            GROUP BY app, title
         """) { stmt in
             sqlite3_bind_double(stmt, 1, start)
             sqlite3_bind_double(stmt, 2, end)
@@ -741,7 +709,7 @@ class Database {
             let app = r["app"] as? String ?? ""
             if isSkipped(app) { continue } // 부분 문자열 스킵은 코드에서 처리
             let title = r["title"] as? String ?? ""
-            let dur = r["duration"] as? Double ?? 0
+            let dur = r["dur"] as? Double ?? 0
             let key = "\(app)|||\(title)"
             if pairMap[key] != nil {
                 pairMap[key]!.dur += dur
@@ -769,42 +737,6 @@ class Database {
         }
         result.sort { ($0["seconds"] as? Double ?? 0) > ($1["seconds"] as? Double ?? 0) }
         result.append(["tag": "__untagged__", "color": "#8b949e", "seconds": untaggedSeconds])
-        return result
-    }
-
-    func getWeeklyTagStats() -> [[String: Any]] {
-        let cal = Calendar.current
-        let formatter = DateFormatter()
-        formatter.calendar = cal
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        var result: [[String: Any]] = []
-        for dayOffset in (0..<7).reversed() {
-            guard let day = cal.date(byAdding: .day, value: -dayOffset, to: Date()) else { continue }
-            let dateStr = formatter.string(from: day)
-            let dayName: String
-            let weekday = cal.component(.weekday, from: day)
-            let dayNames = ["일", "월", "화", "수", "목", "금", "토"]
-            dayName = dayNames[weekday - 1]
-
-            let stats = getTagStats(targetDate: dateStr)
-            let tags = stats.filter { $0["tag"] as? String != "__untagged__" }
-            var taggedTotal: Double = 0
-            var dayTags: [[String: Any]] = []
-            for t in tags {
-                let secs = t["seconds"] as? Double ?? 0
-                taggedTotal += secs
-                dayTags.append(t)
-            }
-            let untaggedSecs = stats.last?["seconds"] as? Double ?? 0
-            result.append([
-                "date": dateStr, "day": dayName,
-                "tags": dayTags,
-                "tagged_seconds": taggedTotal,
-                "untagged_seconds": untaggedSecs,
-                "total_seconds": taggedTotal + untaggedSecs
-            ])
-        }
         return result
     }
 }

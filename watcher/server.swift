@@ -379,20 +379,8 @@ class HTTPServer {
         if path == "/api/permissions" && req.method == "POST" {
             return handlePermissionsAction(req)
         }
-        if path == "/api/recent" && req.method == "GET" {
-            return handleRecent(req)
-        }
-        if path == "/api/summary" && req.method == "GET" {
-            return handleSummary(req)
-        }
-        if path == "/api/hourly" && req.method == "GET" {
-            return handleHourly(req)
-        }
         if path == "/api/browser-sessions" && req.method == "GET" {
             return handleBrowserSessions(req)
-        }
-        if path == "/api/now" && req.method == "GET" {
-            return handleNow(req)
         }
         if path == "/api/categories" && req.method == "GET" {
             return handleGetCategories(req)
@@ -412,16 +400,8 @@ class HTTPServer {
             if let id = Int64(idStr) { return handleDeleteCategory(id: id) }
             return .json(400, ["error": "Invalid id"])
         }
-        if path.hasPrefix("/api/category-matches/") && req.method == "GET" {
-            let idStr = String(path.dropFirst("/api/category-matches/".count))
-            if let id = Int64(idStr) { return handleCategoryMatches(id: id) }
-            return .json(400, ["error": "Invalid id"])
-        }
         if path == "/api/category-all-matches" && req.method == "GET" {
             return handleCategoryAllMatches()
-        }
-        if path == "/api/untagged-pairs" && req.method == "GET" {
-            return handleUntaggedPairs(req)
         }
         if path == "/api/rules" && req.method == "POST" {
             return handleCreateRule(req)
@@ -438,9 +418,6 @@ class HTTPServer {
         }
         if path == "/api/tag-stats" && req.method == "GET" {
             return handleTagStats(req)
-        }
-        if path == "/api/tag-weekly" && req.method == "GET" {
-            return handleTagWeekly(req)
         }
         if path.hasPrefix("/api/sessions/") && req.method == "GET" {
             let prefix = "/api/sessions/"
@@ -507,53 +484,11 @@ class HTTPServer {
         ])
     }
 
-    private func handleRecent(_ req: Request) -> Response {
-        let limit = Int(req.query["limit"] ?? "20") ?? 20
-        let events = db.getTodayEvents(targetDate: req.query["target_date"])
-        let recent = events.suffix(limit).reversed().compactMap { e -> [String: Any]? in
-            guard let dataStr = e["data"] as? String,
-                  let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String] else { return nil }
-            return [
-                "time": e["timestamp"] as? Double ?? 0,
-                "app": data["app"] ?? "Unknown",
-                "title": data["title"] ?? "",
-                "url": data["url"] ?? "",
-                "duration": e["duration"] as? Double ?? 0
-            ]
-        }
-        return .json(200, ["events": recent])
-    }
-
-    private func handleSummary(_ req: Request) -> Response {
-        let rows = db.getAppSummary(startDate: req.query["start"], endDate: req.query["end"])
-        return .json(200, ["rows": rows])
-    }
-
-    private func handleHourly(_ req: Request) -> Response {
-        let hourly = db.getHourlyBreakdown(targetDate: req.query["target_date"])
-        return .json(200, hourly)
-    }
+    // (dead API handler 제거됨: recent/summary/hourly/now — 대시보드 미사용)
 
     private func handleBrowserSessions(_ req: Request) -> Response {
         let sessions = db.buildSessions(browserOnly: true, targetDate: req.query["target_date"])
         return .json(200, ["sessions": sessions])
-    }
-
-    private func handleNow(_ req: Request) -> Response {
-        let events = db.getTodayEvents(targetDate: req.query["target_date"])
-        guard let last = events.last else {
-            return .json(200, ["app": nil, "since": nil])
-        }
-        guard let dataStr = last["data"] as? String,
-              let data = try? JSONSerialization.jsonObject(with: dataStr.data(using: .utf8)!) as? [String: String] else {
-            return .json(200, ["app": nil, "since": nil])
-        }
-        return .json(200, [
-            "app": data["app"] as Any,
-            "title": data["title"] as Any,
-            "url": data["url"] as Any,
-            "since": last["timestamp"] as Any
-        ])
     }
 
     // MARK: - Categories API
@@ -600,19 +535,9 @@ class HTTPServer {
         return .json(200, ["status": "ok"])
     }
 
-    private func handleCategoryMatches(id: Int64) -> Response {
-        let matches = db.getCategoryMatches(id: id)
-        return .json(200, matches)
-    }
-
     private func handleCategoryAllMatches() -> Response {
         let allMatches = db.getAllCategoryMatches()
         return .json(200, allMatches)
-    }
-
-    private func handleUntaggedPairs(_ req: Request) -> Response {
-        let pairs = db.getUntaggedPairs()
-        return .json(200, pairs)
     }
 
     // MARK: - Rules API
@@ -654,11 +579,6 @@ class HTTPServer {
     private func handleTagStats(_ req: Request) -> Response {
         let stats = db.getTagStats(targetDate: req.query["target_date"])
         return .json(200, stats)
-    }
-
-    private func handleTagWeekly(_ req: Request) -> Response {
-        let weekly = db.getWeeklyTagStats()
-        return .json(200, weekly)
     }
 
     private func handleAppSessions(_ req: Request, appName: String) -> Response {

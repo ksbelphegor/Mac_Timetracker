@@ -129,6 +129,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkServer()
         startTimers()
 
+        // 버퍼드 DB 쓰기 (5s/20개 배치 commit — heartbeat당 fsync 제거)
+        Database.shared.startWriteBuffer()
+
         // 권한 check (AX + Screen Recording) + 실시간 상태 모니터 (60s silent recheck)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.checkPermissions()

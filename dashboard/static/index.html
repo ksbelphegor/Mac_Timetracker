@@ -738,11 +738,12 @@ async function loadHomeSessions(name) {
 
     // 같은 사이트 이름 또는 도메인 기준 그룹핑
     const groups = {};
-    const unknownKey = '(알 수 없음)';
     for (const s of data.sessions) {
-      let key = extractGroupName(s) || unknownKey;
-      // 타이틀 미확정(앱명으로 폴백)된 세션 — 그룹명이 앱 이름과 동일하면 중복이니 "알 수 없음"으로
-      if (key.toLowerCase() === name.toLowerCase()) key = unknownKey;
+      total += s.duration;
+      const key = extractGroupName(s) || '(알 수 없음)';
+      // 타이틀 미확정(앱명으로 폴백) 세션은 아예 표시하지 않음 —
+      // 앱 목록 행에 총 시간이 이미 있고, 내용도 앱 이름뿐이라 중복
+      if (key.toLowerCase() === name.toLowerCase()) continue;
       if (!groups[key]) groups[key] = { title: key, sessions: [], total: 0 };
       groups[key].sessions.push(s);
       groups[key].total += s.duration;
@@ -761,6 +762,7 @@ async function loadHomeSessions(name) {
         <span class="lh-dur lh-btn ${sgSortBy==='duration'?'active':''}" onclick="sortSG('duration')">활성화${sortArrow('duration')}</span>
         <span class="lh-spacer"></span>
       </div>
+      ${sorted.length === 0 ? '<div style="padding:8px 4px;color:#585e6a;font-size:11px;">타이틀 미확정 기록만 있어 표시할 항목 없음 (보조제어 권한 부여 시 채워짐)</div>' : ''}
       ${sorted.map((g, gi) => {
         const first = g.sessions[0];
         const last = g.sessions[g.sessions.length - 1];
@@ -933,9 +935,9 @@ async function loadBrowserSessions() {
       // 사이트별 그룹화
       const groups = {};
       for (const s of sessions) {
-        let site = extractSite(s.title, s.app);
-        // 위와 동일: 사이트명 = 앱 이름(제목 미확정)이면 중복이므로 "알 수 없음"으로
-        if (site.toLowerCase() === s.app.toLowerCase()) site = '(알 수 없음)';
+        const site = extractSite(s.title, s.app);
+        // 위와 동일: 사이트명 = 앱 이름(제목 미확정)이면 표시하지 않음
+        if (site.toLowerCase() === s.app.toLowerCase()) continue;
         if (!groups[site]) groups[site] = { site, apps: new Set(), total: 0, sessions: [] };
         groups[site].apps.add(s.app);
         groups[site].total += s.duration;

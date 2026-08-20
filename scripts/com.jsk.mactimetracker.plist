@@ -12,7 +12,11 @@
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <false/>
+    <dict>
+        <!-- 크래시(비정상 종료) 시에만 자동 재시작 — 사용자가 명시적으로 quit하면 떠남 -->
+        <key>SuccessfulExit</key>
+        <true/>
+    </dict>
     <key>StandardOutPath</key>
     <string>/Users/JSK/.mactimetracker/launchd.log</string>
     <key>StandardErrorPath</key>

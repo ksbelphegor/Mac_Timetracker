@@ -1,6 +1,9 @@
 # App data
 .mactimetracker/
 
+# Build state
+.build-version
+
 # Build artifacts
 *.app
 Mac Time Tracker.app/

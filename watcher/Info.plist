@@ -9,7 +9,7 @@
     <key>CFBundleName</key>
     <string>Mac Time Tracker</string>
     <key>CFBundleVersion</key>
-    <string>1.2</string>
+    <string>1</string>
     <key>CFBundleShortVersionString</key>
     <string>1.2</string>
     <key>LSUIElement</key>

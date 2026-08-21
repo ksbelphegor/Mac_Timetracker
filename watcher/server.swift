@@ -93,8 +93,11 @@ class HTTPServer {
         return false
     }
 
-    /// 요청 완진(헤더 끝 + Content-Length 만큼 body 수취)될 때까지 receive 반복.
-    /// 일부만 받은 요청으로 400을 답하거나 body를 떨어트리는 문제를 방지.
+    /// 요청 완결(헤더 끝 + Content-Length 만큼 body 수신)될 때까지 receive 반복.
+    /// 일부만 받은 요청으로 400을 답거나 body를 떨어트리는 문제를 방지.
+    /// NWConnection.receive은 비동기(콜백)이라 재귀가 불가피. request body가
+    /// 1KB 이하(heartbeat 등)인 현재 워크로드에선 stack 깊이가 아니므로 유지.
+    /// maxRequestSize(1MB) 상한 + 413 처리로 unbounded grow 방지.
     private func pump(_ conn: NWConnection, buffer: Data) {
         var buffer = buffer
         conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, error in
@@ -184,7 +187,7 @@ class HTTPServer {
         return Request(method: method.uppercased(), path: fullPath, query: query, body: body)
     }
 
-    /// 완진 여부를 모르는(예: 누락된 헤더 끝) 요청을 그대로 파싱
+    /// 완결 여부를 모르는(예: 누락된 헤더 끝) 요청을 그대로 파싱
     private static func parseRaw(_ buf: Data) -> Request? {
         guard let raw = String(data: buf, encoding: .utf8) else { return nil }
         let lines = raw.components(separatedBy: "\r\n")
@@ -632,6 +635,8 @@ class HTTPServer {
         ]
 
         var pngData: Data?
+        // NSWorkspace.icon 호출은 메인 스레드 — AppKit 아이콘 API는 메인에서만 안전.
+        // 메인에서 호출 시엔 직접, 배경 스레드에선 main.async + sem + 0.5s timeout.
         func loadIcon() {
             let ws = NSWorkspace.shared
             var icon: NSImage?
@@ -661,9 +666,7 @@ class HTTPServer {
 
             guard let srcIcon = icon else { return }
 
-            // 5-6. 20x20 PNG로 렌더 — 순수 CoreGraphics (bitmap context)
-            // NSImage.lockFocus(=AppKit 공유 그래픽 상태) 대신 CGContext 사용 →
-            // 어떤 스레드에서든 안전 (메인 스레드 불필요)
+            // 5. 20x20 PNG 렌더 (bitmap context — NSWorkspace.icon에만 main 필요)
             let size = 20
             guard let cg = srcIcon.cgImage(forProposedRect: nil, context: nil, hints: nil),
                   let ctx = CGContext(data: nil, width: size, height: size,
@@ -682,11 +685,19 @@ class HTTPServer {
             }
         }
 
-        // 호출 스레드(http-server serial queue)에서 직접 실행.
-        // ⚠️ DispatchQueue.main.sync 절대 금지: 권한 알림(NSAlert.runModal) 등으로
-        // 메인 스레드가 모달 루프에 갇히면 main 큐가 drain되지 않아 서버 큐가
-        // 영구 데드락 (모든 API 요청 타임아웃 → 대시보드 탭 공백).
-        loadIcon()
+        // AppKit 아이콘 API는 메인 스레드에서만 안전 → non-main 시 main async + sem.
+        // 모달 루프 갇힘 방지: timeout(0.5s) 실패 시 다음 요청에서 재시도.
+        // (main.sync 금지 — NSAlert 등으로 메인 블로킹 시 데드락)
+        if Thread.isMainThread {
+            loadIcon()
+        } else {
+            let sem = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async {
+                loadIcon()
+                sem.signal()
+            }
+            _ = sem.wait(timeout: .now() + 0.5)
+        }
 
         // 유효한 아이콘만 캐시 (너무 작으면 기본 문서 아이콘 → 무시)
         if let d = pngData, d.count > 200 {

@@ -6,6 +6,10 @@ import SQLite3
 class Database {
     static let shared = Database()
     var db: OpaquePointer?
+    /// 읽기 전용 2번째 connection — WAL 모드에서 read/write 동시 안전.
+    /// 쓰기 배치(5s)와 읽기(10s 폴링)를 직렬화하는 단일 lock 제거.
+    /// ⚠️ 읽기 경로 전용 — 이 connection으로 작성 금지.
+    private var readDb: OpaquePointer?
     let dbPath: String
     /// 단일 connection SQLite는 thread-safe가 아님 — 모든 접근에 lock
     private let dbLock = NSLock()
@@ -32,13 +36,13 @@ class Database {
     private var flushTimer: DispatchSourceTimer?
     private let flushThreshold = 20
 
-    // ── columnization (data JSON → app/title/url 컬럼) 읽기용 COALESCE ──
-    // backfill 완료 전(컬럼 NULL)은 JSON fallback, 완료 후(컬럼 채움)은 컬럼 사용
-    // ⚠️ json_valid 가드: 정화된 data('' 또는 '{}' 등)가 유효 JSON이 아니면
-    //    json_extract이 'malformed JSON' 에러로 쿼리 전체를 죽이는 것을 방지
-    private let sqlColApp = "COALESCE(app, CASE WHEN json_valid(data) THEN json_extract(data, '$.app') END)"
-    private let sqlColTitle = "COALESCE(title, CASE WHEN json_valid(data) THEN json_extract(data, '$.title') END)"
-    private let sqlColURL = "COALESCE(url, CASE WHEN json_valid(data) THEN json_extract(data, '$.url') END)"
+    // ── columnization (data JSON → app/title/url 컬럼) 읽기 ──
+    // backfill 완료(모든 행에 컬럼 채움) 이후 JSON 가드 제거 →
+    // json_valid가 row당 utf8 전체 실행되는 비용 삭제 (여기서 32MB/쿼리).
+    // NULL 폴백: app='Unknown', title=app, url='' (트리에 존재) — 기존과 동일
+    private let sqlColApp = "app"
+    private let sqlColTitle = "title"
+    private let sqlColURL = "url"
     private var backfillTimer: DispatchSourceTimer?
 
     /// 버퍼드 쓰기 시작 (앱 launch 시 1회)
@@ -71,6 +75,7 @@ class Database {
         walTimer = maint
     }
     private var walTimer: DispatchSourceTimer?
+    private var retentionTimer: DispatchSourceTimer?
 
     /// 현재 버퍼를 즉시 DB에 commit (terminate/동기화 시)
     func flushPending() {
@@ -125,6 +130,8 @@ class Database {
         flushTimer?.cancel(); flushTimer = nil
         walTimer?.cancel(); walTimer = nil
         backfillTimer?.cancel(); backfillTimer = nil
+        retentionTimer?.cancel(); retentionTimer = nil
+        if let rdb = readDb { sqlite3_close(rdb); self.readDb = nil }
         guard let db = db else { return }
         sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil)
         sqlite3_close(db)
@@ -141,8 +148,20 @@ class Database {
         }
         sqlite3_exec(db, "PRAGMA journal_mode=WAL", nil, nil, nil)
         sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nil, nil, nil)
+        sqlite3_exec(db, "PRAGMA busy_timeout=5000", nil, nil, nil)
         createTables()
         migrateEventColumns()
+        // 읽기 전용 connection (WAL: 읽기는 main과 동시) — busy_timeout은 retry 보장
+        var ro: OpaquePointer?
+        if sqlite3_open_v2(dbPath, &ro, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
+            sqlite3_exec(ro, "PRAGMA busy_timeout=5000", nil, nil, nil)
+            readDb = ro
+        }
+        // 기존: 단일 connection — 모든 읽기/쓰기를 dbLock으로 직렬화
+        // 변경: readDb(읽기)는 별도로 열림 → 읽기(Q)가 쓰기 배치(W: 5s)와 병행
+        //        dbLock은 쓰기(pendingEvents flush)만 보호
+        //        ⚠️ meta/backfill/VACUUM은 구조 변경 쓰기이므로 db
+        startRetentionMaintenance()
     }
 
     /// events 테이블에 app/title/url 컬럼 + meta 테이블 추가 (idempotent).
@@ -213,7 +232,6 @@ class Database {
             WHERE id >= \(lo) AND id <= \(hi)
         """)
         // 2) data 정화: 알려진 3키 외에 추가 키가 없는 행만 '{}'로 (데이터 보존)
-        //    ⚠️ ''이 아니라 '{}' — 빈 문자열은 JSON이 아니어서 json_extract('')이 에러
         exec("""
             UPDATE events SET data = '{}'
             WHERE id >= \(lo) AND id <= \(hi) AND data != '' AND data != '{}'
@@ -337,10 +355,12 @@ class Database {
     // MARK: - Query helpers
 
     private func queryRows(_ sql: String, _ bind: (OpaquePointer) -> Void) -> [[String: Any]] {
+        // 읽기는 readDb(2nd conn) 사용 — 쓰기 배치(dbLock)와 병행
         var stmt: OpaquePointer?
         var results: [[String: Any]] = []
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            print("[DB] SQL prepare 실패: \(String(cString: sqlite3_errmsg(db))) — \(sql.prefix(120))")
+        let conn = readDb ?? db
+        guard let c = conn, sqlite3_prepare_v2(c, sql, -1, &stmt, nil) == SQLITE_OK else {
+            print("[DB] SQL prepare 실패: \(String(cString: sqlite3_errmsg(conn ?? db))) — \(sql.prefix(120))")
             return []
         }
         bind(stmt!)
@@ -360,14 +380,43 @@ class Database {
             results.append(row)
         }
         // ⚠️ step 에러는 더 이상 침묵하지 않음 (이전: 부분 결과 반환으로 세션이 조용히 비어 보임)
-        if sqlite3_step(stmt) != SQLITE_DONE {
-            print("[DB] ⚠️ SQL step 에러(\(String(cString: sqlite3_errmsg(db)))) — \(results.count)rows만 반환: \(sql.prefix(120))")
+        if let c = conn, sqlite3_step(stmt) != SQLITE_DONE {
+            print("[DB] ⚠️ SQL step 에러(\(String(cString: sqlite3_errmsg(c)))) — \(results.count)rows만 반환: \(sql.prefix(120))")
         }
         sqlite3_finalize(stmt)
         return results
     }
 
     // MARK: - API
+
+    /// 브라우저 내부 페이지 (UI) — 탭 전환 중 수집된 스탈 URL로
+    /// 실제 사이트를 이 페이지로 잘못 분류시키는 것을 방지.
+        /// 브라우저 내부 페이지 (UI) — 탭 전환 중 수집된 stale URL로
+    /// 실제 사이트를 잘못 분류시키지 않게 방지.
+    /// (실측: 스트리머 채팅 제목 + chrome://extensions/ 재교착 사례)
+    private func isBrowserInternalURL(_ url: String) -> Bool {
+        if url.isEmpty { return false }
+        if url.hasPrefix("chrome://") || url.hasPrefix("brave://")
+            || url.hasPrefix("chrome-extension://") || url.hasPrefix("edge://")
+            || url.hasPrefix("vivaldi://") || url.hasPrefix("whale://") {
+            return true
+        }
+        if url == "about:blank" { return true }
+        if url == "view-source:" || url.hasPrefix("view-source:") { return true }
+        return false
+    }
+
+    /// c.gle.com 등 보안 리다이렉트 사이트 → 외부로 리다이렉트되어
+    /// 실제 페이지 URL로 수집되지 않음
+    private func isReferralOnlyURL(_ url: String) -> Bool {
+        guard let h = urlComponentsHost(url) else { return false }
+        return h == "c.gle.com" || h.hasSuffix(".gle.com")
+    }
+
+    private func urlComponentsHost(_ url: String) -> String? {
+        guard let c = URLComponents(string: url), let host = c.host?.lowercased() else { return nil }
+        return host
+    }
 
     private let skipApps: Set<String> = [
         "loginwindow", "WindowServer", "SystemUIServer", "Dock", "Spotlight", "NotificationCenter"
@@ -384,13 +433,86 @@ class Database {
 
     // (getTodayEvents 제거됨: dead API — 읽기 경로 모두 SQL 집계/직접 json_extract 사용)
 
+    // ── Retention: 30일 초과 이벤트 → events_archive (app/title/url만) ──
+    // DB 무제한 성장 방지 (1.5M행/3개월). app/title/url은 columnized 이후
+    // data가 '{}'이므로 3 열만 이관하면 무손실. 30일 단위 rolling.
+    func startRetentionMaintenance() {
+        // 일 1회 (03:00 시작 후 24h 간격) — launchd/앱 재시작 무관, 일 1회 실행
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "db-retention", qos: .background))
+        t.schedule(deadline: .now() + 60 * 15, repeating: 60 * 60 * 24)
+        t.setEventHandler { [weak self] in self?.runRetentionTick() }
+        t.resume()
+        retentionTimer = t
+    }
+
+    private func runRetentionTick() {
+        dbLock.lock()
+        defer { dbLock.unlock() }
+        guard let db = db else { return }
+        let cutoff = Date().timeIntervalSince1970 - 30 * 86400
+        // 1) archive 테이블 idempotent 생성
+        guard sqlite3_exec(db, """
+            CREATE TABLE IF NOT EXISTS events_archive (
+                id INTEGER PRIMARY KEY, bucket_id TEXT, timestamp REAL, duration REAL,
+                app TEXT, title TEXT, url TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_archive_ts ON events_archive(timestamp);
+            """, nil, nil, nil) == SQLITE_OK else { return }
+        // 2) 30일 초과 batch 이관 + 삭제
+        // columnized 이후 data는 '{}' 이므로 3열만 이관하면 무손실
+        if sqlite3_exec(db, "BEGIN", nil, nil, nil) != SQLITE_OK { return }
+        var stmt: OpaquePointer?
+        var moved = 0
+        if sqlite3_prepare_v2(db,
+            "INSERT OR IGNORE INTO events_archive (id, bucket_id, timestamp, duration, app, title, url) " +
+            "SELECT id, bucket_id, timestamp, duration, app, title, url FROM events WHERE timestamp < ?",
+            -1, &stmt, nil) == SQLITE_OK, let s = stmt {
+            sqlite3_bind_double(s, 1, cutoff)
+            if sqlite3_step(s) == SQLITE_DONE { moved = Int(sqlite3_changes(db)) }
+            sqlite3_finalize(s)
+        }
+        if sqlite3_prepare_v2(db, "DELETE FROM events WHERE timestamp < ?", -1, &stmt, nil) == SQLITE_OK, let s = stmt {
+            sqlite3_bind_double(s, 1, cutoff)
+            sqlite3_step(s)
+            sqlite3_finalize(s)
+        }
+        sqlite3_exec(db, "COMMIT", nil, nil, nil)
+        if moved > 0 {
+            print("DB retention: \(moved) rows → events_archive")
+            // 파일 공간 회수 (단일 connection 잠금, 일 1회)
+            sqlite3_exec(db, "VACUUM", nil, nil, nil)
+            sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil)
+        }
+    }
+
+    /// <title> 태그가 포함되어 있는 브라우저 타이틀을 순수 텍스트로 정제.
+    /// (페이지가 self-closing <title .../> 로 <title>를 보여주거나 로딩 중이면
+    /// CGWindowName에 태그 형식이 그대로 담김 — 대시보드에 깨져 보이는 원이.
+    /// 이미 "체인이 싶다" 같이 순정인 타이틀은 포함 없으므로 무해)
+    func cleanHTMLTitle(_ raw: String) -> String {
+        guard let r = raw.range(of: "<title", options: .caseInsensitive) else { return raw }
+        var seg = raw[r.upperBound...]
+        if let closeIdx = seg.range(of: "</title", options: .caseInsensitive)?.lowerBound,
+           closeIdx != seg.startIndex {
+            seg = seg[..<closeIdx]
+        }
+        if seg.hasSuffix("/") { seg = seg.dropLast() }
+        var out = ""
+        var inTag = false
+        for ch in seg {
+            if ch == "<" { inTag = true; continue }
+            if inTag { if ch == ">" { inTag = false }; continue }
+            out.append(ch)
+        }
+        let cleaned = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? raw : cleaned
+    }
+
     func buildSessions(bucketId: String = "aw-watcher-window",
                        appFilter: String? = nil,
                        browserOnly: Bool = false,
                        targetDate: String? = nil) -> [[String: Any]] {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        let (start, end) = parseDate(targetDate)
+                let (start, end) = parseDate(targetDate)
         // columnization: 컬럼(app/title/url) 우선, NULL이면 data JSON fallback
         let rows = queryRows("""
             SELECT timestamp, duration,
@@ -411,10 +533,17 @@ class Database {
 
         for r in rows {
             let app = r["app"] as? String ?? "Unknown"
-            let title = r["title"] as? String ?? app
-            let url = r["url"] as? String ?? ""
+            var title = r["title"] as? String ?? app
+            var url = r["url"] as? String ?? ""
             let ts = r["timestamp"] as? Double ?? 0
             let dur = r["duration"] as? Double ?? 0
+            // 탭 전환 직후 수집된 스탈 URL/제목 로 분류가 깨지는 것 방지
+            if isBrowserInternalURL(url) { url = "" }
+            else if isReferralOnlyURL(url) { url = "" }
+            // <title> 태그 원문이 그대로 들어간 타이틀 정제 (브라우저 수집 불가)
+            if title.contains("<title") {
+                title = cleanHTMLTitle(title)
+            }
 
             if browserOnly && !browserApps.contains(app) {
                 if let c = current { sessions.append(c); current = nil }
@@ -454,9 +583,7 @@ class Database {
     /// 경량화: 앱을 GROUP BY로 SQLite에서 집계 + 마지막 타이틀은 window function으로.
     /// (기존: 하루치 8~10k row를 Swift에서 row당 JSON 파싱 → 이제 수십 개 앱 row만)
     func getTodayInfo(targetDate: String? = nil) -> TodayInfo {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        let (start, end) = parseDate(targetDate)
+                let (start, end) = parseDate(targetDate)
 
         let appRows = queryRows("""
             SELECT \(sqlColApp) as app,
@@ -534,9 +661,7 @@ class Database {
     // MARK: - Categories (ActivityWatch style — hierarchical)
 
     func getCategories() -> [[String: Any]] {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        let rows = queryRows("SELECT id, name, color, regex, parent_id, sort_order, score, created_at FROM categories ORDER BY sort_order ASC, id ASC") { _ in }
+                let rows = queryRows("SELECT id, name, color, regex, parent_id, sort_order, score, created_at FROM categories ORDER BY sort_order ASC, id ASC") { _ in }
         // Get all rules grouped by category_id
         let allRules = queryRows("SELECT id, category_id, pattern, case_insensitive FROM rules ORDER BY id ASC") { _ in }
         var rulesByCat: [Int64: [[String: Any]]] = [:]
@@ -586,7 +711,7 @@ class Database {
         guard sqlite3_step(stmt) == SQLITE_DONE else { sqlite3_finalize(stmt); return nil }
         let id = sqlite3_last_insert_rowid(db)
         sqlite3_finalize(stmt)
-        ruleCache = nil
+        invalidateRuleCache()
         return id
     }
 
@@ -609,7 +734,7 @@ class Database {
         sqlite3_bind_int64(stmt, 7, id)
         sqlite3_step(stmt)
         sqlite3_finalize(stmt)
-        ruleCache = nil
+        invalidateRuleCache()
     }
 
     func deleteCategory(id: Int64) {
@@ -630,15 +755,13 @@ class Database {
         sqlite3_bind_int64(stmt, 1, id)
         sqlite3_step(stmt)
         sqlite3_finalize(stmt)
-        ruleCache = nil
+        invalidateRuleCache()
     }
 
     // MARK: - Rules CRUD
 
     func getRules(categoryId: Int64) -> [[String: Any]] {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        return queryRows("SELECT id, pattern, case_insensitive FROM rules WHERE category_id = ? ORDER BY id ASC") { stmt in
+                return queryRows("SELECT id, pattern, case_insensitive FROM rules WHERE category_id = ? ORDER BY id ASC") { stmt in
             sqlite3_bind_int64(stmt, 1, categoryId)
         }
     }
@@ -655,7 +778,7 @@ class Database {
         guard sqlite3_step(stmt) == SQLITE_DONE else { sqlite3_finalize(stmt); return nil }
         let id = sqlite3_last_insert_rowid(db)
         sqlite3_finalize(stmt)
-        ruleCache = nil
+        invalidateRuleCache()
         return id
     }
 
@@ -670,7 +793,7 @@ class Database {
         sqlite3_bind_int64(stmt, 3, id)
         sqlite3_step(stmt)
         sqlite3_finalize(stmt)
-        ruleCache = nil
+        invalidateRuleCache()
     }
 
     func deleteRule(id: Int64) {
@@ -682,22 +805,28 @@ class Database {
         sqlite3_bind_int64(stmt, 1, id)
         sqlite3_step(stmt)
         sqlite3_finalize(stmt)
-        ruleCache = nil
+        invalidateRuleCache()
     }
 
     // MARK: - Category Resolution (rules-based)
 
     private var ruleCache: [(catName: String, catColor: String, catId: Int64, pattern: NSRegularExpression)]? = nil
+    private let ruleCacheLock = NSLock()
 
     func resolveCategory(app: String, title: String) -> (name: String, color: String)? {
-        dbLock.lock()
-        defer { dbLock.unlock() }
+        // ruleCache만 읽기 (readDb) — dbLock 불필요
         return resolveCategoryLocked(app: app, title: title)
     }
 
-    /// dbLock 보유 상태 전용 (이미 락을 가진 내부 함수에서 호출)
+    /// 무상황 전용 (ruleCache를 읽기) — 다중 스레드 안전을 위해 lock으로 복사본
     private func resolveCategoryLocked(app: String, title: String) -> (name: String, color: String)? {
-        if ruleCache == nil { reloadRuleCache() }
+        ruleCacheLock.lock()
+        var cache = ruleCache
+        ruleCacheLock.unlock()
+        if cache == nil {
+            cache = reloadRuleCache()
+            ruleCacheLock.lock(); ruleCache = cache; ruleCacheLock.unlock()
+        }
         let target = "\(app) \(title)".lowercased()
         for r in ruleCache ?? [] {
             let range = NSRange(target.startIndex..<target.endIndex, in: target)
@@ -708,7 +837,7 @@ class Database {
         return nil
     }
 
-    private func reloadRuleCache() {
+    private func reloadRuleCache() -> [(catName: String, catColor: String, catId: Int64, pattern: NSRegularExpression)] {
         let rows = queryRows("""
             SELECT r.id, r.pattern, r.case_insensitive, c.name as cat_name, c.color as cat_color, c.id as cat_id
             FROM rules r JOIN categories c ON r.category_id = c.id
@@ -727,16 +856,19 @@ class Database {
                 cache.append((name, color, catId, regex))
             }
         }
-        ruleCache = cache
+        return cache
+    }
+
+    /// CRUD에서 cache 무효화 (lock 보호)
+    private func invalidateRuleCache() {
+        ruleCacheLock.lock(); ruleCache = nil; ruleCacheLock.unlock()
     }
 
     // (getCategoryMatches/getTodayEvents 제거됨: 대시보드 미사용 dead API — 경량화)
 
     /// 한 번의 DB 조회로 모든 카테고리의 matches 반환 (성능 최적화)
     func getAllCategoryMatches() -> [String: Any] {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        // 1. 모든 카테고리와 규칙 로드
+                // 1. 모든 카테고리와 규칙 로드
         let allCats = queryRows("""
             SELECT c.id, c.name, c.color, r.id as rid, r.pattern, r.case_insensitive
             FROM categories c
@@ -827,9 +959,7 @@ class Database {
     // MARK: - Tag Stats (regex-based)
 
     func getTagStats(targetDate: String? = nil) -> [[String: Any]] {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        let (start, end) = parseDate(targetDate)
+                let (start, end) = parseDate(targetDate)
         let skipList = skipApps.map { "'\($0)'" }.joined(separator: ",")
         // (app,title) pair 단위 SQL 집계: regex 매칭이 row당(~8k) → pair당(~수십)으로
         let rows = queryRows("""

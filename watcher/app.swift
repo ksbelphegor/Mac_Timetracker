@@ -8,9 +8,21 @@ import os
 
 enum Config {
     static let serverURL = "http://localhost:8000"
+    // 수집 제외 앱: 시스템 프로세스/화면꺼짐/권한창 — DB 성장 40%+를 만드는 loginwindow 포함.
+    // DB와 같은 기준(skipApps)으로 유지 (database.swift와 동기화).
+    static let skipApps: Set<String> = [
+        "loginwindow", "WindowServer", "SystemUIServer", "Dock",
+        "Spotlight", "NotificationCenter", "universalAccessAuthWarn",
+        "SecurityAgent", "UserNotificationCenter", "ScreenSaverEngine"
+    ]
+    static let skipAppSubstrings: [String] = ["시크릿 모드", "(로딩 중)", "(로그인)"]
+    static func isSkipped(_ app: String) -> Bool {
+        if skipApps.contains(app) { return true }
+        return skipAppSubstrings.contains(where: { app.contains($0) })
+    }
     static let heartbeatInterval: TimeInterval = 3
     static let statsRefreshInterval: TimeInterval = 60
-    static let windowTitleCacheTTL: TimeInterval = 5
+    static let windowTitleCacheTTL: TimeInterval = 3
 
     static let browserScripts: [String: String] = [
         "Brave Browser": "tell application \"Brave Browser\"\nset t to title of active tab of window 1\nset u to URL of active tab of window 1\nreturn t & \"|TITLEURL|\" & u\nend tell",
@@ -536,8 +548,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func onAppChanged(name: String, pid: pid_t) {
         guard !paused else { return }
+        // 앱 전환 시 이전 앱의 타이틀/URL 캐시 무효화
+        // (새 앱의 sendHeartbeat이 cache-TTL안에 이전 앱의 옛 URL을 송신하면 분류가 깨짐)
+        windowURL = ""
+        cachedAppName = ""
+        windowTitleTime = .distantPast
         let now = Date()
-        let duration = now.timeIntervalSince(sessionStart)
+        let rawDur = now.timeIntervalSince(sessionStart)
+        // 💤 슬립 후 첫 사건: 의역 슬립 구간(오전 10~오후 5 등)은 실제 작업이 아님
+        // → 마지막 300s(5분)만 기록 (slip 복귀의 아주 짧은 tail). 5분을 초과하는 기간은
+        //   미쓰리로 취급 (0으로 클램핑).
+        let duration = min(max(rawDur, 0), 300)
         sendHeartbeat(app: name, timestamp: now, duration: duration)
         currentApp = name
         currentPID = pid
@@ -550,7 +571,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let app = workspace.frontmostApplication,
               let name = app.localizedName else { return }
         let now = Date()
-        let duration = now.timeIntervalSince(sessionStart)
+        let rawDur = now.timeIntervalSince(sessionStart)
+        // 💤 슬립 후 첫 사건: 의역 슬립 구간(오전 10~오후 5 등)은 실제 작업이 아님
+        // → 마지막 300s(5분)만 기록 (slip 복귀의 아주 짧은 tail). 5분을 초과하는 기간은
+        //   미쓰리로 취급 (0으로 클램핑).
+        let duration = min(max(rawDur, 0), 300)
         sendHeartbeat(app: name, timestamp: now, duration: duration)
         sessionStart = now
         if name != currentApp {
@@ -591,6 +616,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 1. CGWindow API (Core Graphics — instant, no permissions needed)
         title = cgWindowTitle(pid: app.processIdentifier)
 
+        // 1b. CGWindowName이 <title> 태그 그대로 담긴 브라우저(페이지 수집 미완료 등) →
+        //     HTML이 그대로 탭 제목으로 보여 깨져 보임. <title>이 이미 나와 있으므로 안전.
+        if title.contains("<title") {
+            title = cleanBrowserHTMLTitle(title)
+        }
+
         // 2. Browser AppleScript — URL은 비동기로 수집 (브라우저 슬로우 시 UI 블로킹 방지)
         if let script = Config.browserScripts[name] {
             // CGWindow에 이미 title이 있고 URL도 valid 한다면 → 종료
@@ -624,6 +655,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        /// 창 제목 갱신: stale인 경우 only, 동기 fallback (브라우저 페이지 로드등)
+        // 🔐 AX(손쉬운 사용) 권한이 없으면 System Events/AX fallback은 실패만 보장 —
+        // 메인 스레드 동기 osascript(최대 수 초 블로킹) + 최초 자동화 프롬프트 방지
         /// 창 제목 갱신: stale인 경우 only, 동기 fallback (브라우저 페이지 로드등)
         // 🔐 AX(손쉬운 사용) 권한이 없으면 System Events/AX fallback은 실패만 보장 —
         // 메인 스레드 동기 osascript(최대 수 초 블로킹) + 최초 자동화 프롬프트 방지
@@ -746,6 +780,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// CGWindowName이 <title> 태그로 노출된 브라우저 제목을 순수 텍스트로 정제.
+    /// 페이지가 <title> 태그를 self-closing으로 노출하거나 문서 로딩 중이면
+    /// 원문 그대로 (예: "<title .../>"), 이때 자식에 담긴 문자열을 인출.
+    private func cleanBrowserHTMLTitle(_ raw: String) -> String {
+        guard let r = raw.range(of: "<title", options: .caseInsensitive) else { return raw }
+        let afterOpen = raw[r.upperBound...]
+        // 갓에서 닫는 태그까지 자른다 ("</title" case-insensitive)
+        var seg = afterOpen
+        if let closeIdx = afterOpen.range(of: "</title", options: .caseInsensitive)?.lowerBound,
+           closeIdx != afterOpen.startIndex {
+            seg = afterOpen[..<closeIdx]
+        }
+        // self-closing 슬래시 제거
+        if seg.hasSuffix("/") { seg = seg.dropLast() }
+        // 속성 문자열 (lang="en" 등) 제거: 첫 텍스트는 속성 이후의 텍스트 자식에서
+        // 원칙: 태그 이름/속성 위치가 아닌 텍스트 노드를 추출.
+        var out = ""
+        var inTag = false
+        for ch in seg {
+            if ch == "<" { inTag = true; continue }
+            if inTag {
+                if ch == ">" { inTag = false }
+                continue
+            }
+            out.append(ch)
+        }
+        let cleaned = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? raw : cleaned
+    }
+
     func axWindowTitle(pid: pid_t) -> String {
         let appRef = AXUIElementCreateApplication(pid)
         var focused: CFTypeRef?
@@ -765,6 +829,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - HTTP
 
     func sendHeartbeat(app: String, timestamp: Date, duration: TimeInterval) {
+        // 스킵 앱(화면꺼짐/시스템)은 기록 자체를 하지 않음 —
+        // 읽기에서 필터만 하면 하루의 40%(loginwindow)이 남는 DB 성장 방지.
+        guard !Config.isSkipped(app) else { return }
         let title = getWindowTitle()
         let finalTitle = title.isEmpty ? app : title
         var dataDict: [String: String] = ["app": app, "title": finalTitle]

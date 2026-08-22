@@ -6,17 +6,22 @@
     <string>com.jsk.mactimetracker</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/open</string>
+        <!-- 앱 바이너리를 **직접** 실행 (호의 `/usr/bin/open` 중개 제거) —
+             open은 launchd가 실제 앱 프로세스를 추적 못하게 만들어
+             크래시 후 재시작이 안 되는 원인이었음. -->
         <!-- __APP_PATH__: clone한 repo 루트 경로로 교체 (README 참고) -->
-        <string>__APP_PATH__/Mac Time Tracker.app</string>
+        <string>__APP_PATH__/Mac Time Tracker.app/Contents/MacOS/MacTT</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <dict>
-        <!-- 크래시(비정상 종료) 시에만 자동 재시작 — 사용자가 명시적으로 quit하면 떠남 -->
+        <!-- 크래시(시그널/비정상 종료) 시에만 자동 재시작 —
+             사용자가 명시적으로 quit(exit 0)하면 떠남.
+             ⚠️ _SuccessfulExit=false_가 맞는 조합: true는 정반대(정상 종료 시 재시작).
+             (macOS 26 실측: _Crashed=true_는 재기동 안 함 → SuccessfulExit=false 사용) -->
         <key>SuccessfulExit</key>
-        <true/>
+        <false/>
     </dict>
     <key>StandardOutPath</key>
     <string>__HOME__/.mactimetracker/launchd.log</string>

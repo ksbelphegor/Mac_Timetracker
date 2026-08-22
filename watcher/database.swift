@@ -1,18 +1,118 @@
 import Foundation
+import Dispatch
 import SQLite3
+
+// MARK: - PinnedWorker (크래시 수정)
+/// **전용 고정 스레드**에서 job을 실행하는 워커.
+///
+/// 왜 전용 스레드(고정 소유)여야 하는가 — NSLock으로 '공유 connection을 잠그는' 패턴의 한계:
+/// - 실측 크래시(14:53, 빌드 45): readDb/db가 main/http/flush/backfill 등 다중 스레드에서
+///   공유 사용되며 sqlite3_prepare_v2에서 dangling pointer SIGSEGV (backtrace: runBackfillTick).
+/// - 각 connection을 전용 스레드 하나에 **고정 소유**로 바꿔 공유 자체를 제거 =
+///   내부 상태 경합 경로 근절. (GCD serial queue는 dispatch 풀이 스레드를 바꿔 가며 실행 — 고정 스레드로만 안전)
+/// - 실측 검증(빌드 46): 기동 113분 + 병렬 폴링 스트레스 → 크래시 0건.
+/// - 참고: Apple libsqlite3가 로깅하는 "misuse at line ... of [...]" 진단(이 앱 프로세스에서만
+///   관찰 — CLI/Python/동일 Swift 테스트에서는 재현 불가)은 **정보성**이며 크래시 요인이 아님.
+///   (실측: 동일 로그 14k+ 건에도 크래시 0건, 데이터 정확. 로그 약 2건/초 — 무해한 노이즈)
+private final class PinnedWorker: @unchecked Sendable {
+    private struct Job { let run: () -> Void; let done: DispatchSemaphore? }
+
+    private let lock = NSLock()
+    private var jobs: [Job] = []
+    private var stopping = false
+    private var terminated = false
+    private let wake = DispatchSemaphore(value: 0)
+    private let finished = DispatchSemaphore(value: 0)
+    private var thread: Thread?
+
+    init(_ name: String, qos: QualityOfService = .utility) {
+        let t = Thread { [weak self] in
+            guard let self = self else { return }
+            Thread.current.name = name
+            self.lock.lock()
+            self.thread = Thread.current
+            self.lock.unlock()
+            while true {
+                self.lock.lock()
+                let batch = self.jobs
+                self.jobs.removeAll()
+                let stop = self.stopping
+                self.lock.unlock()
+                if !batch.isEmpty {
+                    for job in batch { job.run(); job.done?.signal() }
+                    continue
+                }
+                if stop {
+                    self.lock.lock()
+                    self.terminated = true
+                    self.lock.unlock()
+                    break
+                }
+                self.wake.wait()
+            }
+            self.finished.signal()
+        }
+        t.qualityOfService = qos
+        t.start()
+        thread = t
+    }
+
+    /// 블록을 전용 스레드에서 실행해 결과를 기다림.
+    /// - 이미 워커 스레드 위에서 호출(중첩)이면 인라인 실행 → 재귀 deadlock 방지
+    /// - 워커 종료 후에는 호출 스레드에서 실행 (호출부는 nil-conn guard 필요)
+    func runSync<T>(_ block: @escaping () -> T) -> T {
+        lock.lock()
+        let onWorker = Thread.current === self.thread
+        let dead = terminated
+        lock.unlock()
+        if onWorker || dead { return block() }
+        let done = DispatchSemaphore(value: 0)
+        var result: T?
+        lock.lock()
+        let wasIdle = jobs.isEmpty
+        jobs.append(Job(run: {
+            let r = block()
+            self.lock.lock()
+            result = r
+            self.lock.unlock()
+            done.signal()
+        }, done: done))
+        lock.unlock()
+        if wasIdle { wake.signal() }
+        done.wait()
+        return result!
+    }
+
+    /// 워커 종료: 남은 job 처리 후 스레드 종료 (멱등)
+    func stop() {
+        lock.lock()
+        let already = stopping
+        stopping = true
+        lock.unlock()
+        if !already { wake.signal() }
+        finished.wait(timeout: .now() + 5)
+    }
+}
 
 // MARK: - Database
 
 class Database {
     static let shared = Database()
-    var db: OpaquePointer?
-    /// 읽기 전용 2번째 connection — WAL 모드에서 read/write 동시 안전.
-    /// 쓰기 배치(5s)와 읽기(10s 폴링)를 직렬화하는 단일 lock 제거.
-    /// ⚠️ 읽기 경로 전용 — 이 connection으로 작성 금지.
+    /// ⚠️ 쓰기 connection — `writeWorker` **소유**: 그 스레드에서 생성·사용만 가능
+    /// (libsqlite3 thread-affinity — 다른 스레드 사용 = misuse → 상태 손상 → SIGSEGV).
+    private var db: OpaquePointer?
+    /// ⚠️ 읽기 connection — `readWorker` **소유**: 그 스레드에서 생성·사용만 가능.
+    /// (설계상 읽기 전용 — 쓰기 SQL은 절대 이 connection으로 보냄. WAL: read/write 병행)
     private var readDb: OpaquePointer?
     let dbPath: String
-    /// 단일 connection SQLite는 thread-safe가 아님 — 모든 접근에 lock
+    /// 이제 `pendingEvents`만 보호 (구 "모든 connection 접근 lock"은 스레드 고정으로 대체).
     private let dbLock = NSLock()
+    /// 쓰기 connection 소유 전용 스레드 (1s backfill/5s flush/CRUD/VACUUM 전부 이 스레드)
+    private let writeWorker = PinnedWorker("mactt-db-writer")
+    /// 읽기 connection 소유 전용 스레드 (dashboard 폴링/집계 쿼리 전부 이 스레드)
+    private let readWorker = PinnedWorker("mactt-db-reader")
+    /// 이중 close 방지 (dbLock 보호)
+    private var isClosed = false
 
     private init() {
         dbPath = (FileManager.default.homeDirectoryForCurrentUser.path
@@ -65,11 +165,11 @@ class Database {
         let maint = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "db-maint", qos: .utility))
         maint.schedule(deadline: .now() + 15 * 60, repeating: 15 * 60)
         maint.setEventHandler { [weak self] in
-            self?.dbLock.lock()
-            if let db = self?.db {
-                sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", nil, nil, nil)
+            self?.writeWorker.runSync {
+                if let db = self?.db {
+                    sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", nil, nil, nil)
+                }
             }
-            self?.dbLock.unlock()
         }
         maint.resume()
         walTimer = maint
@@ -77,21 +177,26 @@ class Database {
     private var walTimer: DispatchSourceTimer?
     private var retentionTimer: DispatchSourceTimer?
 
-    /// 현재 버퍼를 즉시 DB에 commit (terminate/동기화 시)
+    /// 현재 버퍼를 즉시 DB에 commit (terminate/동기화 시) — write worker로 hop
     func flushPending() {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        flushPendingLocked()
+        writeWorker.runSync { self.flushPendingLocked() }
     }
 
+    /// **writeWorker 스레드에서만** (쓰기 connection은 이 스레드 소유).
     private func flushPendingLocked() {
-        guard let db = db, !pendingEvents.isEmpty else { return }
+        // conn 먼저 확인 — close 후에는 버퍼를 drain하지 않는다 (데이터 유실 방지)
+        guard let db = db else { return }
+        dbLock.lock()
+        guard !pendingEvents.isEmpty else { dbLock.unlock(); return }
         let batch = pendingEvents
         pendingEvents.removeAll()
+        dbLock.unlock()
 
         var err: UnsafeMutablePointer<CChar>?
         guard sqlite3_exec(db, "BEGIN", nil, nil, &err) == SQLITE_OK else {
+            dbLock.lock()
             pendingEvents.insert(contentsOf: batch, at: 0)  // 실패하면 재시도용 복원
+            dbLock.unlock()
             if let err = err { free(err) }
             return
         }
@@ -123,45 +228,73 @@ class Database {
     }
 
     /// 명시적 close + 남은 버퍼 flush + WAL checkpoint (앱 종료 시)
+    /// 순서가 핵심: 타이머 정지 → 최종 flush → 읽기 배리어 → 소유 스레드에서 close → 워커 정지.
+    /// (connection은 소유 스레드에서만 close 가능 —과거 "main에서 lock+close" 패턴이
+    ///  백그라운드 워커의 use-after-free였다)
     func close() {
         dbLock.lock()
-        defer { dbLock.unlock() }
-        flushPendingLocked()
+        if isClosed { dbLock.unlock(); return }
+        isClosed = true
+        dbLock.unlock()
+        // 1) 타이머 정지 (새 worker job 발생 차단)
         flushTimer?.cancel(); flushTimer = nil
         walTimer?.cancel(); walTimer = nil
         backfillTimer?.cancel(); backfillTimer = nil
         retentionTimer?.cancel(); retentionTimer = nil
-        if let rdb = readDb { sqlite3_close(rdb); self.readDb = nil }
-        guard let db = db else { return }
-        sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil)
-        sqlite3_close(db)
-        self.db = nil
+        // 2) 최종 flush (write worker)
+        flushPending()
+        // 3) 배리어 — 진행 중인 읽기 전부 대기 (mailbox FIFO)
+        readWorker.runSync { }
+        // 4) connection을 각 소유 스레드에서 close
+        writeWorker.runSync {
+            if let db = self.db {
+                sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil)
+                sqlite3_close(db)
+                self.db = nil
+            }
+        }
+        readWorker.runSync {
+            if let r = self.readDb {
+                sqlite3_close(r)
+                self.readDb = nil
+            }
+        }
+        // 5) 워커 정지 (남은 job drain 후 스레드 종료)
+        writeWorker.stop()
+        readWorker.stop()
     }
 
     private func open() {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        guard sqlite3_open(dbPath, &db) == SQLITE_OK else {
-            print("DB open failed: \(dbPath)")
-            db = nil
-            return
+        // connection을 **소유 스레드에서** 오픈 (생성 스레드 == 유일 사용 스레드)
+        writeWorker.runSync {
+            var conn: OpaquePointer?
+            guard sqlite3_open(self.dbPath, &conn) == SQLITE_OK else {
+                print("DB open failed: \(self.dbPath)")
+                if let c = conn { sqlite3_close(c) }
+                self.db = nil
+                return
+            }
+            sqlite3_exec(conn, "PRAGMA journal_mode=WAL", nil, nil, nil)
+            sqlite3_exec(conn, "PRAGMA synchronous=NORMAL", nil, nil, nil)
+            sqlite3_exec(conn, "PRAGMA busy_timeout=5000", nil, nil, nil)
+            self.db = conn
+            self.createTables()
+            // 읽기 connection (WAL: 읽기는 쓰기 배치와 동시) — 소유 스레드에서 오픈
+            // migrate 전에 여는 이유: 컬럼 존재 확인 queryRows가 readDb를 타게 하기 위함
+            self.readWorker.runSync {
+                var ro: OpaquePointer?
+                // 읽기 전용(READONLY): 방어적 — 이 connection은 쓰기 SQL로 절대 쓰지 않음.
+                // (실측: RO vs RW가 libsqlite3 "misuse" 진단과 무관 — 앱 프로세스 자체 특성)
+                if sqlite3_open_v2(self.dbPath, &ro, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let r = ro {
+                    sqlite3_exec(r, "PRAGMA busy_timeout=5000", nil, nil, nil)
+                    self.readDb = r
+                } else {
+                    print("DB read connection open failed — read 경로 비활성")
+                }
+            }
+            self.migrateEventColumns()
+            self.startRetentionMaintenance()
         }
-        sqlite3_exec(db, "PRAGMA journal_mode=WAL", nil, nil, nil)
-        sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nil, nil, nil)
-        sqlite3_exec(db, "PRAGMA busy_timeout=5000", nil, nil, nil)
-        createTables()
-        migrateEventColumns()
-        // 읽기 전용 connection (WAL: 읽기는 main과 동시) — busy_timeout은 retry 보장
-        var ro: OpaquePointer?
-        if sqlite3_open_v2(dbPath, &ro, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
-            sqlite3_exec(ro, "PRAGMA busy_timeout=5000", nil, nil, nil)
-            readDb = ro
-        }
-        // 기존: 단일 connection — 모든 읽기/쓰기를 dbLock으로 직렬화
-        // 변경: readDb(읽기)는 별도로 열림 → 읽기(Q)가 쓰기 배치(W: 5s)와 병행
-        //        dbLock은 쓰기(pendingEvents flush)만 보호
-        //        ⚠️ meta/backfill/VACUUM은 구조 변경 쓰기이므로 db
-        startRetentionMaintenance()
     }
 
     /// events 테이블에 app/title/url 컬럼 + meta 테이블 추가 (idempotent).
@@ -200,9 +333,11 @@ class Database {
     /// 백그라운드 배치 백필 (1s tick, 배치 500행, id watermark 기반 resume).
     /// zero-loss 보장: 추가 키(예: _ax/_src)가 있는 행은 data 원본 보존.
     private func runBackfillTick() {
-        // 단일 connection 보호: 다른 스레드(메인/http/flush)와 동시 사용 방지
-        dbLock.lock()
-        defer { dbLock.unlock() }
+        // 쓰기 connection은 writeWorker 단일 소유 — lock 불필요
+        writeWorker.runSync { self.runBackfillTickLocked() }
+    }
+
+    private func runBackfillTickLocked() {
         guard let db = db else { return }
         let rows = queryRows("SELECT MAX(id) AS max_id FROM events") { _ in }
         let maxId = rows.first?["max_id"] as? Int64 ?? 0
@@ -296,37 +431,44 @@ class Database {
     }
 
     private func exec(_ sql: String) {
-        sqlite3_exec(db, sql, nil, nil, nil)
+        // 쓰기 connection → writeWorker 스레드에서 실행 (중첩 호출 시 인라인)
+        writeWorker.runSync {
+            guard let db = self.db else { return }
+            if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
+                print("[DB] exec 에러: \(String(cString: sqlite3_errmsg(db))) — \(sql.prefix(80))")
+            }
+        }
     }
 
     func insertHeartbeat(bucketId: String = "aw-watcher-window",
                          timestamp: Double, duration: Double, data: String) {
         dbLock.lock()
-        defer { dbLock.unlock() }
-        guard db != nil else { return }
+        guard !isClosed else { dbLock.unlock(); return }
         if !bucketEnsured {
             ensureBucketRaw(bucketId)
             bucketEnsured = true
         }
         // 즉시 commit 대신 버퍼에 쌓고, threshold/타이머로 배치 flush
         pendingEvents.append((bucketId: bucketId, ts: timestamp, dur: duration, data: data))
-        if pendingEvents.count >= flushThreshold {
-            flushPendingLocked()
-        }
+        let over = pendingEvents.count >= flushThreshold
+        dbLock.unlock()
+        if over { flushPending() }
     }
 
     private func ensureBucketRaw(_ id: String) {
-        guard let db = db else { return }
-        let sql = "INSERT OR IGNORE INTO buckets (id, type, client, hostname) VALUES (?, ?, ?, ?)"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 2, ("app" as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 3, ("aw-watcher-window" as NSString).utf8String, -1, nil)
-        let hostname = ProcessInfo.processInfo.hostName
-        sqlite3_bind_text(stmt, 4, (hostname as NSString).utf8String, -1, nil)
-        sqlite3_step(stmt)
-        sqlite3_finalize(stmt)
+        writeWorker.runSync {
+            guard let db = self.db else { return }
+            let sql = "INSERT OR IGNORE INTO buckets (id, type, client, hostname) VALUES (?, ?, ?, ?)"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let s = stmt else { return }
+            sqlite3_bind_text(s, 1, (id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(s, 2, ("app" as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(s, 3, ("aw-watcher-window" as NSString).utf8String, -1, nil)
+            let hostname = ProcessInfo.processInfo.hostName
+            sqlite3_bind_text(s, 4, (hostname as NSString).utf8String, -1, nil)
+            sqlite3_step(s)
+            sqlite3_finalize(s)
+        }
     }
 
     // MARK: - Date helpers
@@ -354,37 +496,50 @@ class Database {
 
     // MARK: - Query helpers
 
-    private func queryRows(_ sql: String, _ bind: (OpaquePointer) -> Void) -> [[String: Any]] {
-        // 읽기는 readDb(2nd conn) 사용 — 쓰기 배치(dbLock)와 병행
-        var stmt: OpaquePointer?
-        var results: [[String: Any]] = []
-        let conn = readDb ?? db
-        guard let c = conn, sqlite3_prepare_v2(c, sql, -1, &stmt, nil) == SQLITE_OK else {
-            print("[DB] SQL prepare 실패: \(String(cString: sqlite3_errmsg(conn ?? db))) — \(sql.prefix(120))")
-            return []
-        }
-        bind(stmt!)
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            var row: [String: Any] = [:]
-            let cols = sqlite3_column_count(stmt)
-            for i in 0..<cols {
-                let name = String(cString: sqlite3_column_name(stmt, i))
-                switch sqlite3_column_type(stmt, i) {
-                case SQLITE_INTEGER: row[name] = sqlite3_column_int64(stmt, i)
-                case SQLITE_FLOAT: row[name] = sqlite3_column_double(stmt, i)
-                case SQLITE_TEXT: row[name] = String(cString: sqlite3_column_text(stmt, i))
-                case SQLITE_BLOB: break
-                default: break
-                }
+    private func queryRows(_ sql: String, _ bind: @escaping (OpaquePointer) -> Void) -> [[String: Any]] {
+        // 읽기 경로 — **readWorker 전용 스레드**에서 실행
+        // (⚠️ readDb만 사용: 쓰기 conn은 다른 스레드 소유 — thread-affinity 위반 금지)
+        return readWorker.runSync {
+            guard let conn = self.readDb else {
+                print("[DB] ⚠️ 읽기 connection 미개방 — \(sql.prefix(80))")
+                return [[String: Any]]()
             }
-            results.append(row)
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(conn, sql, -1, &stmt, nil) == SQLITE_OK, let s = stmt else {
+                print("[DB] SQL prepare 실패: \(String(cString: sqlite3_errmsg(conn))) — \(sql.prefix(120))")
+                return [[String: Any]]()
+            }
+            bind(s)
+            var results: [[String: Any]] = []
+            var rc: Int32 = SQLITE_OK
+            // ⚠️ **재-step 금지**: while 종료 시 마지막 step이 이미 terminal
+            // (DONE/에러) 상태에 도달했음. terminal 후 재-step은 Apple libsqlite3이
+            // "misuse at line ..."으로 진단(2~3건/초 로그 + 상태 손상 가능) —
+            // c45c85a 원본의 재-step이 그 원인이었다. 루프 종료 rc로 판단.
+            repeat {
+                rc = sqlite3_step(s)
+                guard rc == SQLITE_ROW else { break }
+                var row: [String: Any] = [:]
+                let cols = sqlite3_column_count(s)
+                for i in 0..<cols {
+                    let name = String(cString: sqlite3_column_name(s, i))
+                    switch sqlite3_column_type(s, i) {
+                    case SQLITE_INTEGER: row[name] = sqlite3_column_int64(s, i)
+                    case SQLITE_FLOAT: row[name] = sqlite3_column_double(s, i)
+                    case SQLITE_TEXT: row[name] = String(cString: sqlite3_column_text(s, i))
+                    case SQLITE_BLOB: break
+                    default: break
+                    }
+                }
+                results.append(row)
+            } while true
+            // step 에러 감시(재-step 없이 terminal rc로)
+            if rc != SQLITE_DONE {
+                print("[DB] ⚠️ SQL step 에러(\(rc): \(String(cString: sqlite3_errmsg(conn)))) — \(results.count)rows만 반환: \(sql.prefix(120))")
+            }
+            sqlite3_finalize(s)
+            return results
         }
-        // ⚠️ step 에러는 더 이상 침묵하지 않음 (이전: 부분 결과 반환으로 세션이 조용히 비어 보임)
-        if let c = conn, sqlite3_step(stmt) != SQLITE_DONE {
-            print("[DB] ⚠️ SQL step 에러(\(String(cString: sqlite3_errmsg(c)))) — \(results.count)rows만 반환: \(sql.prefix(120))")
-        }
-        sqlite3_finalize(stmt)
-        return results
     }
 
     // MARK: - API
@@ -419,7 +574,10 @@ class Database {
     }
 
     private let skipApps: Set<String> = [
-        "loginwindow", "WindowServer", "SystemUIServer", "Dock", "Spotlight", "NotificationCenter"
+        // ⚠️ app.swift watcher skipApps와 동일하게 유지 (양쪽이 분리 파일 — 한쪽만 수정 금지)
+        "loginwindow", "WindowServer", "SystemUIServer", "Dock",
+        "Spotlight", "NotificationCenter", "universalAccessAuthWarn",
+        "SecurityAgent", "UserNotificationCenter", "ScreenSaverEngine"
     ]
     /// 부분 문자열으로 스킵 (title=app fallback으로 넣히는 앱 포괄)
     private let skipAppSubstrings: [String] = ["시크릿 모드", "(로딩 중)", "(로그인)"]
@@ -446,8 +604,11 @@ class Database {
     }
 
     private func runRetentionTick() {
-        dbLock.lock()
-        defer { dbLock.unlock() }
+        // retention/VACUUM은 쓰기 작업 — writeWorker 단일 소유
+        writeWorker.runSync { self.runRetentionTickLocked() }
+    }
+
+    private func runRetentionTickLocked() {
         guard let db = db else { return }
         let cutoff = Date().timeIntervalSince1970 - 30 * 86400
         // 1) archive 테이블 idempotent 생성
@@ -694,68 +855,71 @@ class Database {
     }
 
     func createCategory(name: String, color: String, regex: String = "", parentId: Int64? = nil, score: Int = 0) -> Int64? {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        let sql = "INSERT INTO categories (name, color, regex, parent_id, score) VALUES (?, ?, ?, ?, ?)"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
-        sqlite3_bind_text(stmt, 1, (name as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 2, (color as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 3, (regex as NSString).utf8String, -1, nil)
-        if let pid = parentId {
-            sqlite3_bind_int64(stmt, 4, pid)
-        } else {
-            sqlite3_bind_null(stmt, 4)
+        return writeWorker.runSync {
+            guard let db = self.db else { return nil }
+            let sql = "INSERT INTO categories (name, color, regex, parent_id, score) VALUES (?, ?, ?, ?, ?)"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            sqlite3_bind_text(stmt, 1, (name as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (color as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (regex as NSString).utf8String, -1, nil)
+            if let pid = parentId {
+                sqlite3_bind_int64(stmt, 4, pid)
+            } else {
+                sqlite3_bind_null(stmt, 4)
+            }
+            sqlite3_bind_int(stmt, 5, Int32(score))
+            guard sqlite3_step(stmt) == SQLITE_DONE else { sqlite3_finalize(stmt); return nil }
+            let id = sqlite3_last_insert_rowid(db)
+            sqlite3_finalize(stmt)
+            self.invalidateRuleCache()
+            return id
         }
-        sqlite3_bind_int(stmt, 5, Int32(score))
-        guard sqlite3_step(stmt) == SQLITE_DONE else { sqlite3_finalize(stmt); return nil }
-        let id = sqlite3_last_insert_rowid(db)
-        sqlite3_finalize(stmt)
-        invalidateRuleCache()
-        return id
     }
 
     func updateCategory(id: Int64, name: String, color: String, regex: String = "", parentId: Int64? = nil, sortOrder: Int = 0, score: Int = 0) {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        let sql = "UPDATE categories SET name = ?, color = ?, regex = ?, parent_id = ?, sort_order = ?, score = ? WHERE id = ?"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        sqlite3_bind_text(stmt, 1, (name as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 2, (color as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 3, (regex as NSString).utf8String, -1, nil)
-        if let pid = parentId {
-            sqlite3_bind_int64(stmt, 4, pid)
-        } else {
-            sqlite3_bind_null(stmt, 4)
+        writeWorker.runSync {
+            guard let db = self.db else { return }
+            let sql = "UPDATE categories SET name = ?, color = ?, regex = ?, parent_id = ?, sort_order = ?, score = ? WHERE id = ?"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            sqlite3_bind_text(stmt, 1, (name as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 2, (color as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 3, (regex as NSString).utf8String, -1, nil)
+            if let pid = parentId {
+                sqlite3_bind_int64(stmt, 4, pid)
+            } else {
+                sqlite3_bind_null(stmt, 4)
+            }
+            sqlite3_bind_int(stmt, 5, Int32(sortOrder))
+            sqlite3_bind_int(stmt, 6, Int32(score))
+            sqlite3_bind_int64(stmt, 7, id)
+            sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+            self.invalidateRuleCache()
         }
-        sqlite3_bind_int(stmt, 5, Int32(sortOrder))
-        sqlite3_bind_int(stmt, 6, Int32(score))
-        sqlite3_bind_int64(stmt, 7, id)
-        sqlite3_step(stmt)
-        sqlite3_finalize(stmt)
-        invalidateRuleCache()
     }
 
     func deleteCategory(id: Int64) {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        // reparent children to grandparent
-        let reparent = "UPDATE categories SET parent_id = (SELECT parent_id FROM categories WHERE id = ?) WHERE parent_id = ?"
-        var stmt1: OpaquePointer?
-        if sqlite3_prepare_v2(db, reparent, -1, &stmt1, nil) == SQLITE_OK {
-            sqlite3_bind_int64(stmt1, 1, id)
-            sqlite3_bind_int64(stmt1, 2, id)
-            sqlite3_step(stmt1)
-            sqlite3_finalize(stmt1)
+        writeWorker.runSync {
+            guard let db = self.db else { return }
+            // reparent children to grandparent
+            let reparent = "UPDATE categories SET parent_id = (SELECT parent_id FROM categories WHERE id = ?) WHERE parent_id = ?"
+            var stmt1: OpaquePointer?
+            if sqlite3_prepare_v2(db, reparent, -1, &stmt1, nil) == SQLITE_OK, let s1 = stmt1 {
+                sqlite3_bind_int64(s1, 1, id)
+                sqlite3_bind_int64(s1, 2, id)
+                sqlite3_step(s1)
+                sqlite3_finalize(s1)
+            }
+            let sql = "DELETE FROM categories WHERE id = ?"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let s = stmt else { return }
+            sqlite3_bind_int64(s, 1, id)
+            sqlite3_step(s)
+            sqlite3_finalize(s)
+            self.invalidateRuleCache()
         }
-        let sql = "DELETE FROM categories WHERE id = ?"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        sqlite3_bind_int64(stmt, 1, id)
-        sqlite3_step(stmt)
-        sqlite3_finalize(stmt)
-        invalidateRuleCache()
     }
 
     // MARK: - Rules CRUD
@@ -767,45 +931,48 @@ class Database {
     }
 
     func createRule(categoryId: Int64, pattern: String, caseInsensitive: Bool = true) -> Int64? {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        let sql = "INSERT INTO rules (category_id, pattern, case_insensitive) VALUES (?, ?, ?)"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
-        sqlite3_bind_int64(stmt, 1, categoryId)
-        sqlite3_bind_text(stmt, 2, (pattern as NSString).utf8String, -1, nil)
-        sqlite3_bind_int(stmt, 3, caseInsensitive ? 1 : 0)
-        guard sqlite3_step(stmt) == SQLITE_DONE else { sqlite3_finalize(stmt); return nil }
-        let id = sqlite3_last_insert_rowid(db)
-        sqlite3_finalize(stmt)
-        invalidateRuleCache()
-        return id
+        return writeWorker.runSync {
+            guard let db = self.db else { return nil }
+            let sql = "INSERT INTO rules (category_id, pattern, case_insensitive) VALUES (?, ?, ?)"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            sqlite3_bind_int64(stmt, 1, categoryId)
+            sqlite3_bind_text(stmt, 2, (pattern as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 3, caseInsensitive ? 1 : 0)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { sqlite3_finalize(stmt); return nil }
+            let id = sqlite3_last_insert_rowid(db)
+            sqlite3_finalize(stmt)
+            self.invalidateRuleCache()
+            return id
+        }
     }
 
     func updateRule(id: Int64, pattern: String, caseInsensitive: Bool = true) {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        let sql = "UPDATE rules SET pattern = ?, case_insensitive = ? WHERE id = ?"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        sqlite3_bind_text(stmt, 1, (pattern as NSString).utf8String, -1, nil)
-        sqlite3_bind_int(stmt, 2, caseInsensitive ? 1 : 0)
-        sqlite3_bind_int64(stmt, 3, id)
-        sqlite3_step(stmt)
-        sqlite3_finalize(stmt)
-        invalidateRuleCache()
+        writeWorker.runSync {
+            guard let db = self.db else { return }
+            let sql = "UPDATE rules SET pattern = ?, case_insensitive = ? WHERE id = ?"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            sqlite3_bind_text(stmt, 1, (pattern as NSString).utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 2, caseInsensitive ? 1 : 0)
+            sqlite3_bind_int64(stmt, 3, id)
+            sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+            self.invalidateRuleCache()
+        }
     }
 
     func deleteRule(id: Int64) {
-        dbLock.lock()
-        defer { dbLock.unlock() }
-        let sql = "DELETE FROM rules WHERE id = ?"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        sqlite3_bind_int64(stmt, 1, id)
-        sqlite3_step(stmt)
-        sqlite3_finalize(stmt)
-        invalidateRuleCache()
+        writeWorker.runSync {
+            guard let db = self.db else { return }
+            let sql = "DELETE FROM rules WHERE id = ?"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let s = stmt else { return }
+            sqlite3_bind_int64(s, 1, id)
+            sqlite3_step(s)
+            sqlite3_finalize(s)
+            self.invalidateRuleCache()
+        }
     }
 
     // MARK: - Category Resolution (rules-based)

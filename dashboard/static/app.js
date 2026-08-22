@@ -80,8 +80,9 @@ function refreshAll() {
   if (document.getElementById('tab-home').classList.contains('active')) loadHome();
   if (document.getElementById('tab-browser').classList.contains('active')) loadBrowserSessions();
   if (document.getElementById('tab-tags').classList.contains('active')) {
-    if (!window._tagLoaded) return;
-    refreshTagStats();
+    if (window._tagLoaded) refreshTagStats();
+    // (미로드 시: 탭 전환 때 loadTags가 담당 — 여기서 return하면
+    //  아래 권한 패널 갱신을 건너뛰는 버그 → return 제거)
   }
   if (permPanelOpen) loadPermissions();
 }
@@ -285,7 +286,8 @@ async function loadHomeSessions(name) {
       if (!groups[key]) groups[key] = { title: key, sessions: [], total: 0 };
       groups[key].sessions.push(s);
       groups[key].total += s.duration;
-      total += s.duration;
+      // ⚠️ total 재가산 금지 — 루프 상단(278행)에서 전량 세션 1회 합산 완료
+      // (이전 버그: 표시 대상 세션만 한 번 더 → 앱 총시간이 ~2배로 부풀림)
     }
 
     // 그룹핑 + 정렬 + 상위 30개
@@ -595,7 +597,7 @@ function renderTodayBreakdown(stats) {
     breakdown.querySelectorAll('.tag-breakdown-card').forEach(card => {
       const tagName = card.querySelector('span:nth-child(2)')?.textContent;
       if (!tagName) return;
-      const s = tagged.find(t => t.name === tagName);
+      const s = tagged.find(t => t.tag === tagName);  // API 필드는 tag (name 아님)
       if (!s) return;
       const sp = card.querySelector('span:nth-child(3)');
       const pctEl = card.querySelector('span:nth-child(4)');
@@ -777,7 +779,7 @@ async function refreshTagStats() {
       const nameEl = card.querySelector('span:nth-child(2)');
       if (!nameEl) return;
       const tagName = nameEl.textContent;
-      const s = tagged.find(t => t.name === tagName);
+      const s = tagged.find(t => t.tag === tagName);  // API 필드는 tag (name 아님)
       if (!s) return;
       const prev = card._prevSecs;
       if (prev !== undefined && Math.abs(s.seconds - prev) < 1) return;  // 1초 미만 변경이면 skip
